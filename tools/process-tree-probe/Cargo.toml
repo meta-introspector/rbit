@@ -15,7 +15,7 @@ tempfile.workspace = true
 tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-win32job = "=2.0.3"
+win32job = "=2.1.0"
 processkit = { version = "=3.3.4", default-features = false, features = ["process-control"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
