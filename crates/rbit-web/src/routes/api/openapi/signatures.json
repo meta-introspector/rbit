@@ -1,0 +1,240 @@
+{
+  "paths": {
+    "/repos/{owner}/{repo}/git/signatures/{id}": {
+      "get": {
+        "operationId": "verifyGitSignature",
+        "summary": "Verify an immutable commit or annotated tag against repository trust",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Explicit verification outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object_id",
+                    "kind",
+                    "state"
+                  ],
+                  "properties": {
+                    "object_id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "unsigned",
+                        "verified",
+                        "unknown",
+                        "invalid",
+                        "unavailable"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object or repository not visible"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/signing_keys": {
+      "get": {
+        "operationId": "listSigningKeys",
+        "summary": "List repository trust keys (administrator)",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public trust keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "kind",
+                      "public_key"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "maxLength": 100
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "ssh",
+                          "openpgp"
+                        ]
+                      },
+                      "public_key": {
+                        "type": "string",
+                        "maxLength": 65536
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "addSigningKey",
+        "summary": "Enroll trusted public signing material (administrator)",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "kind",
+                  "public_key"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ssh",
+                      "openpgp"
+                    ]
+                  },
+                  "public_key": {
+                    "type": "string",
+                    "maxLength": 65536
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Enrolled"
+          },
+          "422": {
+            "description": "Invalid key"
+          },
+          "503": {
+            "description": "Verifier unavailable"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/signing_keys/{id}": {
+      "delete": {
+        "operationId": "deleteSigningKey",
+        "summary": "Revoke repository signing trust (administrator)",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Trust removed"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {}
+  }
+}

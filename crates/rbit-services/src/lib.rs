@@ -1,0 +1,368 @@
+//! # rbit-services
+//!
+//! The application layer: one service per area, each enforcing business rules and
+//! permissions. Services are HTTP-agnostic so the web UI, the REST API, CLI admin
+//! commands and background jobs all share exactly the same behaviour.
+
+pub mod accounts;
+// Actions: foundation (F).
+pub mod actions;
+pub mod admin;
+pub mod agents;
+pub mod archives;
+pub mod audit;
+pub mod authentication_policy;
+pub mod blame;
+pub mod collaborators;
+pub mod contributions;
+mod credentials;
+pub mod error;
+pub mod events;
+// Milestone 3: external sign-in (O).
+pub mod external_auth;
+pub mod file_digest;
+pub mod forks;
+pub mod insights;
+mod insights_recent;
+pub mod instance;
+pub mod issue_relations;
+pub mod issues;
+pub mod jobs;
+pub mod lfs;
+mod lifecycle;
+pub mod limits;
+pub mod mail;
+pub mod mirrors;
+pub mod notification_email;
+pub mod notifications;
+pub mod orgs;
+mod outbound;
+mod password_work;
+pub mod preferences;
+pub mod profiles;
+pub mod projects;
+pub mod protection;
+pub mod pulls;
+pub mod pushes;
+pub mod recovery;
+pub mod references;
+pub mod releases;
+pub mod repo_settings;
+pub mod repositories;
+pub mod security;
+pub mod signatures;
+pub mod ssh_keys;
+pub mod stars;
+pub mod sudo;
+pub mod wikis;
+// Milestone 3: commit statuses (S).
+pub mod statuses;
+pub mod teams;
+pub mod throttle;
+pub mod timeline;
+pub mod tokens;
+pub mod transfers;
+pub mod two_factor;
+pub mod updates;
+mod uploads;
+pub mod webhooks;
+// Milestone 3: editing files in the browser (E).
+pub mod edits;
+// Milestone 3: importing and push mirrors (M).
+pub mod imports;
+pub mod push_mirrors;
+
+use std::sync::Arc;
+
+use rbit_core::Config;
+use rbit_git::RepositoryStorage;
+use rbit_identity::PasswordWork;
+use rbit_storage::{Database, KvStore};
+
+pub use accounts::{AccountService, SignUp};
+// Actions: foundation (F).
+pub use actions::ActionsService;
+pub use admin::AdminService;
+pub use archives::ArchiveService;
+pub use audit::AuditService;
+pub use blame::BlameService;
+pub use collaborators::CollaboratorService;
+pub use error::ServiceError;
+pub use events::{DomainEvent, EventBus};
+pub use external_auth::ExternalAuthService;
+pub use forks::ForkService;
+pub use insights::InsightsService;
+pub use instance::InstanceService;
+pub use issues::IssueService;
+pub use jobs::JobService;
+pub use lfs::LfsService;
+pub use limits::{ConcurrencyLimiter, ConcurrencySlot};
+pub use mail::MailService;
+pub use mirrors::MirrorService;
+pub use notification_email::NotificationEmailService;
+pub use notifications::NotificationService;
+pub use orgs::{CreateOrganization, OrgContext, OrgService, UpdateOrganization};
+pub use preferences::PreferenceService;
+pub use profiles::ProfileService;
+pub use protection::ProtectionService;
+pub use pulls::PullService;
+pub use pushes::{PendingPush, PushService};
+pub use recovery::RecoveryService;
+pub use references::ReferenceService;
+pub use releases::ReleaseService;
+pub use repo_settings::RepoSettingsService;
+pub use repositories::{CreateRepository, RepoContext, RepoHeaderData, RepoSearch, RepoSearchResults, RepositoryService};
+pub use ssh_keys::SshKeyService;
+pub use stars::{StarService, StarSummary};
+pub use statuses::StatusService;
+pub use teams::TeamService;
+pub use throttle::{ThrottleScope, ThrottleService};
+pub use timeline::{IssueContext, ThreadServices, TimelineService};
+pub use tokens::{AccessTokenService, CreateAccessToken};
+pub use transfers::TransferService;
+pub use two_factor::TwoFactorService;
+pub use webhooks::WebhookService;
+// Milestone 3: editing files in the browser (E).
+pub use edits::EditService;
+// Milestone 3: importing and push mirrors (M).
+pub use imports::ImportService;
+pub use push_mirrors::PushMirrorService;
+
+/// The infrastructure every service is built from. Cheap to clone (all handles are `Arc`s).
+#[derive(Debug, Clone)]
+pub struct ServiceContext {
+    pub config: Arc<Config>,
+    pub database: Database,
+    pub authentication_policy: authentication_policy::AuthenticationPolicyService,
+    pub kv: KvStore,
+    pub repositories: RepositoryStorage,
+    pub events: EventBus,
+}
+
+/// All services, constructed once at start-up and shared by reference.
+#[derive(Debug, Clone)]
+pub struct Services {
+    passwords: PasswordWork,
+    pub updates: updates::UpdateNotices,
+    pub contributions: contributions::ContributionService,
+    pub accounts: AccountService,
+    pub admin: AdminService,
+    pub agents: agents::AgentService,
+    pub audit: AuditService,
+    pub blame: BlameService,
+    pub events: EventBus,
+    pub insights: InsightsService,
+    pub instance: InstanceService,
+    pub authentication_policy: authentication_policy::AuthenticationPolicyService,
+    pub jobs: JobService,
+    pub mail: MailService,
+    pub orgs: OrgService,
+    pub projects: projects::ProjectService,
+    pub issue_relations: issue_relations::RelationService,
+    pub profiles: ProfileService,
+    /// Boxed behind an `Arc`: it is one of many fields, and an inline value enlarges every
+    /// future that holds `Services`.
+    pub sudo: Arc<sudo::SudoService>,
+    pub pushes: PushService,
+    pub recovery: RecoveryService,
+    pub repo_settings: RepoSettingsService,
+    pub repositories: RepositoryService,
+    pub ssh_keys: SshKeyService,
+    pub stars: StarService,
+    pub throttle: ThrottleService,
+    pub tokens: AccessTokenService,
+    pub two_factor: TwoFactorService,
+    // Milestone 2 wave A: access (A).
+    pub collaborators: CollaboratorService,
+    pub teams: TeamService,
+    pub transfers: TransferService,
+    // API & webhooks (W).
+    pub webhooks: WebhookService,
+    // Repository essentials (R).
+    pub archives: ArchiveService,
+    pub forks: ForkService,
+    pub mirrors: MirrorService,
+    pub releases: ReleaseService,
+    /// Git transport processes, shared by smart HTTP and SSH (`[repository]
+    /// max_git_processes`; per address: `max_git_requests_per_ip`, applied to HTTP).
+    pub git_processes: ConcurrencyLimiter,
+    // Frontend wave: themes (T).
+    pub preferences: PreferenceService,
+    // Milestone 2 wave B: the shared issue timeline (T0).
+    pub timeline: ThreadServices,
+    // Issues (I).
+    pub issues: IssueService,
+    pub references: ReferenceService,
+    pub notifications: NotificationService,
+    // Pull requests (P).
+    pub pulls: PullService,
+    // Branch protection (B).
+    pub protection: ProtectionService,
+    pub signatures: signatures::SignatureService,
+    pub security: Arc<security::SecurityService>,
+    // Milestone 3: commit statuses and required checks (S).
+    pub statuses: StatusService,
+    // Milestone 3: email notifications (N).
+    pub notification_email: NotificationEmailService,
+    // Milestone 3: editing files in the browser (E).
+    pub edits: EditService,
+    // Milestone 3: Git LFS (L).
+    pub lfs: LfsService,
+    // Milestone 3: external sign-in (O).
+    pub external_auth: ExternalAuthService,
+    // Milestone 3: importing and push mirrors (M).
+    pub imports: ImportService,
+    pub push_mirrors: PushMirrorService,
+    // Actions: foundation (F). `None` unless `[actions] enabled`: then nothing of Actions
+    // runs, is routed or is written.
+    pub actions: Option<ActionsService>,
+    /// Repository wiki pages: reads, history and published changes.
+    pub wikis: wikis::pages::WikiService,
+}
+
+impl Services {
+    pub async fn new(config: Arc<Config>, database: &Database, kv: &KvStore) -> Result<Self, ServiceError> {
+        let passwords = password_work::configured(&config)?;
+        // Composition runs once; keep its large initializer out of callers' future frames.
+        Box::pin(Self::with_password_work(config, database, kv, passwords)).await
+    }
+
+    /// Composes an instance around an explicitly owned password budget.
+    ///
+    /// Embedders may share one owner across instances; tests can hold its reservations
+    /// deterministically. Startup policy remains validated, and clones are injected
+    /// into every password consumer rather than placed in broad service context.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid configuration or infrastructure/service initialization errors.
+    pub async fn with_password_work(
+        config: Arc<Config>,
+        database: &Database,
+        kv: &KvStore,
+        passwords: PasswordWork,
+    ) -> Result<Self, ServiceError> {
+        password_work::validate_capacity(&config, &passwords)?;
+        let authentication_policy =
+            authentication_policy::AuthenticationPolicyService::load(database, config.security.require_two_factor).await?;
+        let ctx = ServiceContext {
+            authentication_policy: authentication_policy.clone(),
+            config: Arc::clone(&config),
+            database: database.clone(),
+            kv: kv.clone(),
+            repositories: RepositoryStorage::new(config.storage.repositories_dir()),
+            events: EventBus::new(),
+        };
+        // Before anything is published: new hook ids (and event stamps) start above these.
+        ctx.events.note_existing_webhooks(database.webhooks().max_id().await?);
+        let instance = InstanceService::load(&ctx).await?;
+        // Shared so recovery emails use the same delivery queue and the same rate limits.
+        let mail = MailService::new(ctx.clone()).with_instance(instance.clone(), &config.mail);
+        let throttle = ThrottleService::new(ctx.clone());
+        // Shared so the issue and pull request services spend the same content budget and
+        // record through the same timeline.
+        let timeline = ThreadServices::new(ctx.database.clone(), ctx.repositories.clone(), ctx.events.clone(), throttle.clone());
+        let references = ReferenceService::new(ctx.database.clone(), timeline.clone());
+        let repositories = RepositoryService::new(&ctx);
+        // Milestone 3 (N): notification emails share the mail queue and the rate limits.
+        let notification_email = NotificationEmailService::new(ctx.clone(), mail.clone(), throttle.clone(), instance.clone());
+        // Milestone 3 (O): fails on an invalid `[auth]` section, so the server won't start.
+        let external_auth = ExternalAuthService::new(&ctx, throttle.clone())?;
+        // Milestone 3 (M): the importer stores release files and LFS objects through the
+        // same services (LFS placement shares a lock with the orphan sweep).
+        let releases = ReleaseService::new(ctx.clone());
+        let lfs = LfsService::new(ctx.clone());
+        let setup_token = accounts::bootstrap_setup_token(&config, &database.accounts()).await?;
+        let accounts = AccountService::new(
+            Arc::clone(&config),
+            database.accounts(),
+            accounts::session_persistence(database, kv),
+            instance.clone(),
+            ctx.events.clone(),
+            setup_token,
+            passwords.clone(),
+        );
+
+        let issues = indexed_issues(ctx.clone(), timeline.clone(), references.clone(), throttle.clone()).await?;
+
+        let pulls = PullService::with_shared(ctx.clone(), timeline.clone(), throttle.clone());
+        Ok(Self {
+            passwords: passwords.clone(),
+            updates: updates::UpdateNotices::new(&config.updates),
+            accounts: accounts.clone(),
+            contributions: contributions::ContributionService::new(ctx.clone()),
+            audit: AuditService::new(ctx.clone()),
+            blame: BlameService::new(),
+            jobs: JobService::new(ctx.clone()),
+            mail: mail.clone(),
+            recovery: RecoveryService::builder(ctx.clone(), passwords.clone())
+                .mail(mail)
+                .throttle(throttle.clone())
+                .instance(instance.clone())
+                .accounts(accounts.clone())
+                .build(),
+            ssh_keys: SshKeyService::new(ctx.clone()),
+            throttle: throttle.clone(),
+            two_factor: TwoFactorService::new(ctx.clone(), instance.clone(), passwords.clone()),
+            admin: AdminService::new(ctx.clone(), instance.clone(), passwords),
+            insights: InsightsService::new(ctx.clone()),
+            projects: projects::ProjectService::new(&ctx),
+            issue_relations: issue_relations::RelationService::new(&ctx),
+            orgs: OrgService::new(ctx.clone(), instance.clone()),
+            sudo: Arc::new(sudo::SudoService::new(ctx.clone(), accounts.clone(), throttle.clone())),
+            profiles: ProfileService::new(ctx.clone(), accounts, throttle.clone()),
+            pushes: PushService::new(ctx.clone()),
+            repo_settings: RepoSettingsService::new(database.clone(), ctx.repositories.clone(), ctx.events.clone()),
+            collaborators: CollaboratorService::new(ctx.clone()),
+            teams: TeamService::new(ctx.clone()),
+            transfers: TransferService::new(ctx.clone()),
+            webhooks: WebhookService::new(ctx.clone()),
+            archives: ArchiveService::new(ctx.clone()),
+            forks: ForkService::new(ctx.clone(), repositories.clone()),
+            mirrors: MirrorService::new(ctx.clone()),
+            releases: releases.clone(),
+            git_processes: ConcurrencyLimiter::new(config.repository.max_git_processes(), config.repository.max_git_requests_per_ip()),
+            preferences: PreferenceService::new(ctx.clone()),
+            issues,
+            references,
+            pulls: pulls.clone(),
+            timeline,
+            notifications: NotificationService::new(ctx.clone()).with_email(notification_email.clone()),
+            protection: ProtectionService::new(ctx.clone()),
+            signatures: signatures::SignatureService::new(ctx.clone()),
+            security: Arc::new(security::SecurityService::new(ctx.clone(), pulls)),
+            statuses: StatusService::new(ctx.clone()),
+            // Milestone 3: email notifications (N).
+            notification_email,
+            // Milestone 3: editing files in the browser (E).
+            edits: EditService::new(ctx.clone(), ProtectionService::new(ctx.clone()), PushService::new(ctx.clone())),
+            lfs: lfs.clone(),
+            // Milestone 3: external sign-in (O).
+            external_auth,
+            // Milestone 3: importing and push mirrors (M).
+            imports: ImportService::new(ctx.clone(), repositories.clone(), lfs, releases),
+            push_mirrors: PushMirrorService::new(ctx.clone()),
+            // Actions: foundation (F).
+            actions: ActionsService::new(ctx.clone()),
+            wikis: wikis::pages::WikiService::new(database, &config.storage.data_dir.join("wikis")),
+            repositories,
+            stars: StarService::new(ctx.clone()),
+            agents: agents::AgentService::new(&ctx),
+            tokens: AccessTokenService::new(&ctx),
+            events: ctx.events.clone(),
+            authentication_policy,
+            instance,
+        })
+    }
+}
+
+async fn indexed_issues(
+    ctx: ServiceContext,
+    timeline: TimelineService,
+    references: ReferenceService,
+    throttle: ThrottleService,
+) -> Result<IssueService, ServiceError> {
+    let issues = IssueService::new(ctx, timeline, references, throttle);
+    issues.index_existing_mentions().await?;
+    Ok(issues)
+}

@@ -1,0 +1,314 @@
+//! Repository lifecycle and permission-checked access.
+//!
+//! Access follows [`rbit_access::grants`]: this service loads what the viewer was
+//! granted (organisation role and base permission, team grants, collaborator permission)
+//! through the grant port in one query and lets the pure policy decide. Listings filter with the store's shared
+//! readable-by predicate, which expresses the same rules in SQL.
+//!
+//! Renamed and transferred repositories remain reachable under their old names (see
+//! migration `0016_repo_redirects.sql`): [`RepositoryService::moved_to`] tells web pages
+//! where to redirect, [`RepositoryService::open_following_renames`] serves Git there.
+
+use std::{path::PathBuf, sync::Arc};
+
+use rbit_core::access::{Grants, repo_access};
+use rbit_core::{Account, AccountId, Config, Permission, RepoAccess, RepoId, User, mirror::Mirror, repository::OwnedRepository};
+use rbit_git::{RepositoryReader, RepositoryStorage};
+use rbit_storage::{
+    RepositoryStore,
+    sqlite::{ForkParent, RepositoryPage, collaborators::ViewerGrants},
+};
+
+use crate::{EventBus, ServiceContext, ServiceError, StarSummary, timeline::OpenCounts};
+
+mod aliases;
+
+use rbit_repositories::discovery::RepositoryListings;
+pub use rbit_repositories::discovery::{EXPLORE_PAGE_SIZE, RepoSearch, RepoSearchResults};
+
+pub use rbit_repositories::{browse, creation::CreateRepository};
+mod creation;
+
+/// A repository the viewer is allowed to see, with what they may do to it.
+#[derive(Debug, Clone)]
+pub struct RepoContext {
+    pub repo: OwnedRepository,
+    pub access: RepoAccess,
+    /// The signed-in user `access` is exactly the access of, so it can be reused for
+    /// them within the request. `None` for anonymous viewers and for contexts whose
+    /// access is not a user's own (system work, deploy keys, capped LFS tokens).
+    pub viewer: Option<AccountId>,
+    /// `viewer`'s collaborator permission on the repository, read with their other grants
+    /// in this request (`None` without one, and for owners and site administrators, whose
+    /// grants are not looked up).
+    pub collaborator: Option<Permission>,
+    pub reader: RepositoryReader,
+    pub disk_path: PathBuf,
+}
+
+impl RepoContext {
+    /// The archive guard: [`ServiceError::Archived`] when the repository is archived.
+    ///
+    /// Every write to a repository's content asks this, at the same chokepoints branch
+    /// protection uses — the push gate (`ProtectionService::check_push`, for HTTP, SSH and
+    /// browser edits), merges, issues, pull requests, comments, reviews, labels,
+    /// milestones, releases, commit statuses and LFS uploads and locks — after the
+    /// access check, so only people who could otherwise write learn why they may not.
+    /// Reading, cloning, forking and starring never ask; neither do the settings that
+    /// archive, unarchive, transfer or delete the repository.
+    pub fn ensure_writable(&self) -> Result<(), ServiceError> {
+        if self.repo.repo.is_archived() { Err(ServiceError::Archived) } else { Ok(()) }
+    }
+
+    /// Whether the viewer may change the repository's content: write access to a
+    /// repository that is not archived. What pages use to show write controls.
+    pub fn can_write_content(&self) -> bool {
+        self.access.can_write() && !self.repo.repo.is_archived()
+    }
+
+    /// Loads repository `id` for system work (background jobs), or `None` if it no
+    /// longer exists. See [`Self::for_system`].
+    pub(crate) async fn load_for_system(ctx: &ServiceContext, id: RepoId) -> Result<Option<Self>, ServiceError> {
+        let repo = ctx.database.admin().find_repository(id).await?;
+        Ok(repo.map(|repo| Self::for_system(repo, &ctx.repositories)))
+    }
+
+    /// A read-only context for system work on an already loaded repository.
+    ///
+    /// There is no viewer, so the context grants exactly [`RepoAccess::Read`]: jobs may
+    /// read Git data to warm caches, but anything that checks `access` for writing or
+    /// administration refuses. It is crate-private so no request handler can obtain one.
+    pub(crate) fn for_system(repo: OwnedRepository, storage: &RepositoryStorage) -> Self {
+        let disk_path = storage.path_for(repo.repo.owner_id, repo.repo.id);
+        let reader = storage.reader(repo.repo.owner_id, repo.repo.id);
+        Self { repo, access: RepoAccess::Read, viewer: None, collaborator: None, reader, disk_path }
+    }
+}
+
+/// What every repository page shows in its header besides the repository itself, read
+/// together with it by [`RepositoryService::open_page`] and shown only once the viewer
+/// may read the repository.
+#[derive(Debug, Clone)]
+pub struct RepoHeaderData {
+    pub stars: StarSummary,
+    /// Forks the viewer may read.
+    pub fork_count: u64,
+    /// The repository this one was forked from, when the viewer may read it.
+    pub parent: Option<ForkParent>,
+    pub mirror: Option<Mirror>,
+    pub open_counts: OpenCounts,
+    /// The repository's wiki is switched on.
+    pub wiki_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepositoryService {
+    config: Arc<Config>,
+    store: RepositoryStore,
+    storage: RepositoryStorage,
+    events: EventBus,
+    authentication_policy: crate::authentication_policy::AuthenticationPolicyService,
+}
+
+impl RepositoryService {
+    pub(crate) fn new(ctx: &ServiceContext) -> Self {
+        Self {
+            config: Arc::clone(&ctx.config),
+            store: ctx.database.repositories(),
+            storage: ctx.repositories.clone(),
+            events: ctx.events.clone(),
+            authentication_policy: ctx.authentication_policy.clone(),
+        }
+    }
+
+    /// Resolves and authorises the owner of a new repository (also used for forks).
+    pub(crate) async fn owner_for_new_repository(&self, actor: &User, owner: &str) -> Result<Account, ServiceError> {
+        authorised_owner(&self.store, actor, owner).await
+    }
+
+    /// Loads `owner/name` for `viewer`. Repositories the viewer cannot read are reported
+    /// as [`ServiceError::NotFound`] so their existence is not leaked.
+    ///
+    /// Only the current name matches; web pages answer an old name with a redirect
+    /// ([`Self::moved_to`]), the Git transports use [`Self::open_following_renames`].
+    pub async fn open(&self, viewer: Option<&User>, owner: &str, name: &str) -> Result<RepoContext, ServiceError> {
+        let name = name.strip_suffix(".git").unwrap_or(name);
+        let repo = self.store.find_by_path(owner, name).await?.ok_or(ServiceError::NotFound)?;
+        self.open_found(viewer, repo).await
+    }
+
+    /// Like [`Self::open`], together with the page header's data ([`RepoHeaderData`]) in
+    /// the same statement. Access is decided from that row exactly as [`Self::open`]
+    /// decides it, before anything is returned: a repository the viewer may not read is
+    /// [`ServiceError::NotFound`]. Only a private parent of a fork needs a second lookup,
+    /// to check that the viewer may read it too.
+    pub async fn open_page(&self, viewer: Option<&User>, owner: &str, name: &str) -> Result<(RepoContext, RepoHeaderData), ServiceError> {
+        let name = name.strip_suffix(".git").unwrap_or(name);
+        let viewer_is_admin = viewer.is_some_and(|user| user.is_admin);
+        let page = self.store.find_page(owner, name, viewer.map(User::id), viewer_is_admin).await?.ok_or(ServiceError::NotFound)?;
+        let RepositoryPage {
+            repo,
+            grants,
+            star_count,
+            starred_by_viewer,
+            readable_forks,
+            parent,
+            mirror,
+            open_issues,
+            open_pulls,
+            wiki_enabled,
+        } = page;
+        self.check_enrollment(viewer).await?;
+        let grants = page_grants(viewer, &repo, grants);
+        let ctx = self.context(viewer, repo, grants)?;
+        let parent = match parent {
+            Some(parent) if !parent.visibility.is_public() || viewer.is_some_and(|user| user.is_agent) => {
+                match self.open(viewer, &parent.owner, &parent.name).await {
+                    Ok(opened) if opened.repo.repo.id == parent.id => Some(parent),
+                    Ok(_) | Err(ServiceError::NotFound) => None,
+                    Err(error) => return Err(error),
+                }
+            }
+            parent => parent,
+        };
+        let header = RepoHeaderData {
+            stars: StarSummary { count: i64::try_from(star_count).unwrap_or(i64::MAX), starred_by_viewer },
+            fork_count: readable_forks,
+            parent,
+            mirror,
+            open_counts: OpenCounts { issues: open_issues, pulls: open_pulls },
+            wiki_enabled,
+        };
+        Ok((ctx, header))
+    }
+
+    /// Like [`Self::open`], but `owner/name` may also be a name the repository had before
+    /// it was renamed or transferred, so existing clones keep working over Git. A
+    /// repository currently called `owner/name` always wins over an old name.
+    pub async fn open_following_renames(&self, viewer: Option<&User>, owner: &str, name: &str) -> Result<RepoContext, ServiceError> {
+        rbit_repositories::aliases::RepositoryAliases::open(&aliases::AliasView { service: self, viewer }, owner, name).await
+    }
+
+    /// Where the repository formerly called `owner/name` lives now, if `viewer` may read
+    /// it. `None` for names that were never moved away from, are taken again, or belong to
+    /// a repository the viewer cannot see (so its new name does not leak).
+    pub async fn moved_to(&self, viewer: Option<&User>, owner: &str, name: &str) -> Result<Option<OwnedRepository>, ServiceError> {
+        rbit_repositories::aliases::RepositoryAliases::moved_to(&aliases::AliasView { service: self, viewer }, owner, name).await
+    }
+
+    async fn open_found(&self, viewer: Option<&User>, repo: OwnedRepository) -> Result<RepoContext, ServiceError> {
+        self.check_enrollment(viewer).await?;
+        let grants = viewer_grants(&self.store, viewer, &repo).await?;
+        self.context(viewer, repo, grants)
+    }
+
+    async fn check_enrollment(&self, viewer: Option<&User>) -> Result<(), ServiceError> {
+        if let Some(user) = viewer {
+            let principal = if user.is_agent { user.agent_owner_id.ok_or(ServiceError::Forbidden)? } else { user.id() };
+            if self.authentication_policy.needs_enrollment(principal).await? {
+                return Err(ServiceError::Forbidden);
+            }
+        }
+        Ok(())
+    }
+
+    /// The context of `repo` for `viewer` with `grants`, or [`ServiceError::NotFound`]
+    /// when they may not read it.
+    fn context(&self, viewer: Option<&User>, repo: OwnedRepository, grants: Grants) -> Result<RepoContext, ServiceError> {
+        let access = repo_access(viewer, &repo, &grants);
+        if !access.can_read() {
+            return Err(ServiceError::NotFound);
+        }
+        let disk_path = self.storage.path_for(repo.repo.owner_id, repo.repo.id);
+        let reader = self.storage.reader(repo.repo.owner_id, repo.repo.id);
+        Ok(RepoContext { repo, access, viewer: viewer.map(User::id), collaborator: grants.collaborator, reader, disk_path })
+    }
+
+    /// Repositories of `owner` that `viewer` may see.
+    pub async fn list_for_owner(&self, viewer: Option<&User>, owner: &Account) -> Result<Vec<OwnedRepository>, ServiceError> {
+        Ok(RepositoryListings::new(&self.store).for_owner(viewer, owner).await?)
+    }
+
+    /// The dashboard list: `user`'s own repositories, those of their organisations and
+    /// those shared with them (each only if they may read it), most recently updated first.
+    pub async fn list_for_dashboard(&self, user: &User) -> Result<Vec<OwnedRepository>, ServiceError> {
+        Ok(RepositoryListings::new(&self.store).dashboard(user).await?)
+    }
+
+    /// One page (`limit` repositories after skipping `offset`) of the same list as
+    /// [`Self::list_for_dashboard`], uncapped, with the total across all pages.
+    pub async fn page_for_member(&self, user: &User, limit: u32, offset: u32) -> Result<(Vec<OwnedRepository>, u64), ServiceError> {
+        Ok(RepositoryListings::new(&self.store).member_page(user, limit, offset).await?)
+    }
+
+    pub async fn recent_public(&self, limit: u32) -> Result<Vec<OwnedRepository>, ServiceError> {
+        Ok(RepositoryListings::new(&self.store).recent_public(limit).await?)
+    }
+
+    /// One page of public repositories matching `search` (name or description).
+    /// Pages past the end are clamped to the last page.
+    pub async fn explore(&self, search: &RepoSearch) -> Result<RepoSearchResults, ServiceError> {
+        Ok(rbit_repositories::discovery::RepositoryDiscovery::new(&self.store).explore(search).await?)
+    }
+
+    /// The largest file size rendered inline in the browser.
+    pub fn max_render_bytes(&self) -> usize {
+        self.config.repository.max_render_bytes
+    }
+}
+
+/// The account called `owner` if `actor` may put repositories there: themselves (also when
+/// `owner` is empty), or an organisation they belong to (site administrators: any
+/// organisation). Shared by repository creation, forks and transfers.
+pub(crate) async fn authorised_owner(store: &RepositoryStore, actor: &User, owner: &str) -> Result<Account, ServiceError> {
+    rbit_repositories::creation::RepositoryOwnership::resolve(store, actor, owner).await.map_err(creation::owner_error)
+}
+
+/// Every repository of `owner`, whoever may read it, for owner-level management.
+pub(crate) async fn all_for_owner(database: &rbit_storage::Database, owner: AccountId) -> Result<Vec<OwnedRepository>, ServiceError> {
+    Ok(RepositoryListings::new(&database.repositories()).all_for_owner(owner).await?)
+}
+
+/// What `viewer` was granted on `repo`, for [`repo_access`], loaded through the
+/// `rbit-access` grant port only when it can change the outcome.
+pub(crate) async fn viewer_grants(store: &RepositoryStore, viewer: Option<&User>, repo: &OwnedRepository) -> Result<Grants, ServiceError> {
+    let viewer = viewer.map(rbit_core::access::viewer);
+    Ok(rbit_access::grants::viewer_grants(store, viewer, repo.repo.id, repo.repo.owner_id).await?)
+}
+
+/// `stored` grants of `viewer` read together with `repo` (already for this viewer),
+/// counted only when [`viewer_grants`] would have looked them up.
+fn page_grants(viewer: Option<&User>, repo: &OwnedRepository, stored: ViewerGrants) -> Grants {
+    let applies = viewer.is_some_and(|user| rbit_access::grants::grants_apply(&rbit_core::access::viewer(user), &repo.repo.owner_id));
+    if applies { stored.into() } else { Grants::default() }
+}
+
+/// Search only an already authorized repository's configured default branch.
+pub async fn search_code(ctx: &RepoContext, text: String, path: String, language: String) -> Result<rbit_git::CodeResults, ServiceError> {
+    let query = rbit_git::CodeQuery::new(text, path, language).map_err(|message| ServiceError::Invalid(message.into()))?;
+    if ctx.reader.is_empty().await? {
+        return Ok(rbit_git::CodeResults::default());
+    }
+    ctx.reader
+        .search_code(format!("refs/heads/{}", ctx.repo.repo.default_branch), query)
+        .await?
+        .ok_or(ServiceError::Unavailable { retry_after_seconds: 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn results(total: u64, page: u32) -> RepoSearchResults {
+        RepoSearchResults { repos: Vec::new(), total, page, per_page: 30 }
+    }
+
+    #[test]
+    fn page_arithmetic() {
+        assert_eq!(results(0, 1).page_count(), 1);
+        assert_eq!(results(30, 1).page_count(), 1);
+        assert_eq!(results(31, 1).page_count(), 2);
+        assert!(!results(31, 1).has_previous() && results(31, 1).has_next());
+        assert!(results(31, 2).has_previous() && !results(31, 2).has_next());
+    }
+}

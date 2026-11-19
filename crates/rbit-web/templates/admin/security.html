@@ -1,0 +1,14 @@
+{% extends "admin/layout.html" %}
+{% import "macros.html" as ui %}
+{% block admin_content %}
+<div class="max-w-3xl">
+  <h2 class="text-xl font-semibold">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::Security.text(page.locale)) %}{% endcall %}</h2>
+  <p class="mt-1 text-[13px] text-ink-muted">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::SiteIntro.text(page.locale)) %}{% endcall %}</p>
+  {% let action_url = "/admin/security" %}
+  {% include "settings/authentication_policy.html" %}
+  <section class="box mt-6 p-4"><h3 class="font-medium">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::Providers.text(page.locale)) %}{% endcall %}</h3>
+    <p class="hint">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::ProvidersHelp.text(page.locale)) %}{% endcall %}</p>
+    <a class="btn mt-3" href="/admin/configuration?section=auth">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::ConfigureProviders.text(page.locale)) %}{% endcall %}</a>
+  </section>
+</div>
+{% endblock %}

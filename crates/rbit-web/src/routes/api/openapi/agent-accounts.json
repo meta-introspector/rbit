@@ -1,0 +1,960 @@
+{
+  "paths": {
+    "/user/agents": {
+      "get": {
+        "operationId": "listAgentAccounts",
+        "tags": [
+          "agents"
+        ],
+        "summary": "List owned agent identities",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. Bounded to 50 identities; this list is not paginated.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List owned agent identities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "maxItems": 50,
+                  "items": {
+                    "$ref": "#/components/schemas/AgentAccount"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAgentAccount",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Create an owned agent identity",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. Creates an identity without credentials. Agent handles are permanent and actions retain distinct account attribution.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Create an owned agent identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAccount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentAccountInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/agents/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAgentAccount",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Read an owned agent identity",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. ",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read an owned agent identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAccount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateAgentAccount",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Replace agent scopes and capabilities",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. Requires the current revision; slug is immutable. Setting enabled=false permanently revokes credentials. Reenabling does not restore them.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replace agent scopes and capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAccount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentAccountUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/agents/{id}/disable": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "disableAgentAccount",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Disable an agent and revoke its credentials",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. Works even when an old scope is no longer available. Attribution is retained.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disable an agent and revoke its credentials"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentAccountRevision"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/agents/{id}/credentials": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listAgentCredentials",
+        "tags": [
+          "agents"
+        ],
+        "summary": "List agent credential metadata",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. Never returns credential secrets. At most ten linked credentials exist per identity.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List agent credential metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "$ref": "#/components/schemas/AgentCredential"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAgentCredential",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Issue an agent credential",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. ",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Issue an agent credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentCredentialSecret"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCredentialInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/agents/{id}/credentials/{token}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "revokeAgentCredential",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Revoke an agent credential",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. ",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoke an agent credential"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/user/agents/{id}/credentials/{token}/rotate": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "rotateAgentCredential",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Atomically replace an agent credential",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. The previous credential is revoked in the same transaction that links its replacement. Failed or stale requests preserve it, including at the ten-credential cap.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Atomically replace an agent credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentCredentialSecret"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCredentialInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/agent-policy": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getOrganizationAgentPolicy",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Read organization agent policy",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. The human must currently be an organization owner.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read organization agent policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAgentPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      },
+      "put": {
+        "operationId": "setOrganizationAgentPolicy",
+        "tags": [
+          "agents"
+        ],
+        "summary": "Set organization agent policy",
+        "description": "Requires an unlimited human personal access token with admin scope. Agents cannot use management endpoints. The human must currently be an organization owner. Policy applies immediately to current and future organization repositories.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Set organization agent policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAgentPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or revoked credential"
+          },
+          "403": {
+            "description": "Insufficient token scope or owner authority"
+          },
+          "404": {
+            "description": "Identity, scope or organization is unavailable"
+          },
+          "409": {
+            "description": "Agent revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationAgentPolicy"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AgentAccountScope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "id",
+          "access"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "repository",
+              "organization"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ]
+          }
+        }
+      },
+      "AgentAccountInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slug",
+          "name",
+          "capabilities",
+          "scopes"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "push",
+                "issues",
+                "pull_requests",
+                "statuses",
+                "dispatch",
+                "read_logs",
+                "merge"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "contains": {
+              "const": "read"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentAccountScope"
+            },
+            "minItems": 1,
+            "maxItems": 32,
+            "description": "Unique kind/id targets. Organization-wide grants require the creating human to be a current organization owner. Effective access remains bounded by live human rights and organization policy."
+          }
+        }
+      },
+      "AgentAccount": {
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "capabilities",
+          "scopes",
+          "id",
+          "owner_id",
+          "login",
+          "type",
+          "enabled",
+          "revision",
+          "created_at"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "push",
+                "issues",
+                "pull_requests",
+                "statuses",
+                "dispatch",
+                "read_logs",
+                "merge"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "contains": {
+              "const": "read"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentAccountScope"
+            },
+            "minItems": 1,
+            "maxItems": 32,
+            "description": "Unique kind/id targets. Organization-wide grants require the creating human to be a current organization owner. Effective access remains bounded by live human rights and organization policy."
+          },
+          "id": {
+            "type": "integer"
+          },
+          "owner_id": {
+            "type": "integer"
+          },
+          "login": {
+            "type": "string"
+          },
+          "type": {
+            "const": "Bot"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AgentAccountUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "enabled",
+          "agent"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/AgentAccountInput"
+          }
+        }
+      },
+      "AgentAccountRevision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "AgentCredential": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "hint",
+          "scope",
+          "created_at",
+          "last_used_at",
+          "expires_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Stable credential-management identifier, distinct from the underlying personal access token ID. Never reused after deletion."
+          },
+          "name": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "AgentCredentialSecret": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "hint",
+          "scope",
+          "created_at",
+          "last_used_at",
+          "expires_at",
+          "token"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Stable credential-management identifier, distinct from the underlying personal access token ID. Never reused after deletion."
+          },
+          "name": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "token": {
+            "type": "string",
+            "writeOnly": false,
+            "description": "Returned only once by creation or rotation; store securely. Responses use Cache-Control:no-store."
+          }
+        }
+      },
+      "AgentCredentialInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "name",
+          "scope"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ]
+          },
+          "expires_in_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "enum": [
+              7,
+              30,
+              90,
+              365,
+              null
+            ],
+            "default": 30,
+            "description": "Null means no expiration. A delegated credential may not outlive the owner token used to create or rotate it."
+          }
+        }
+      },
+      "OrganizationAgentPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allow_agents"
+        ],
+        "properties": {
+          "allow_agents": {
+            "type": "boolean",
+            "description": "False blocks all delegated access to organization repositories, including explicitly scoped individual repositories."
+          }
+        }
+      }
+    }
+  }
+}

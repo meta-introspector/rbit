@@ -1,0 +1,29 @@
+[package]
+name = "rbit-collaboration"
+description = "Collaboration models and statically composed label catalog workflows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# Reference scanning reads Markdown text; the pure model graph stays engine-free.
+applications = ["dep:pulldown-cmark"]
+
+[dependencies]
+rbit-access = { workspace = true }
+rbit-repositories = { workspace = true, default-features = false }
+rbit-contracts = { workspace = true, default-features = false }
+rbit-identity-models = { workspace = true, default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+semver.workspace = true
+thiserror.workspace = true
+pulldown-cmark = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

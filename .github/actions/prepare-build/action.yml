@@ -1,0 +1,20 @@
+name: Prepare build resources
+description: Provide swap for large Rust template compilations on GitHub-hosted Linux runners.
+runs:
+  using: composite
+  steps:
+    - name: Add temporary Linux swap
+      # Only on GitHub's own machines, which are discarded after the job. A self-hosted
+      # runner keeps running, and a swap file left on would outlive the job.
+      if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+      shell: bash
+      run: |
+        # Hosted Linux machines can run out of RAM compiling the web templates.
+        # This file disappears with the runner; it never enters build artifacts.
+        swap_file="${RUNNER_TEMP:?}/rbit-ci.swap"
+        df -h "$RUNNER_TEMP"
+        sudo fallocate -l 8G "$swap_file"
+        sudo chmod 600 "$swap_file"
+        sudo mkswap "$swap_file"
+        sudo swapon "$swap_file"
+        free -h

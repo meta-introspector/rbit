@@ -1,0 +1,189 @@
+//! Runtime instance settings (site name, registration, …) editable by administrators.
+//!
+//! The configuration supplies defaults; overrides persisted in `SQLite` are merged over them
+//! at start-up and after every update. The effective settings are cached in memory, so
+//! [`InstanceService::current`] is synchronous and cheap enough for every request.
+
+use std::sync::{Arc, RwLock};
+
+use rbit_core::{InstanceSettings, OrgCreationPolicy, RegistrationMode, User, Visibility, config::MAX_DIGEST_HOUR};
+pub use rbit_storage::sqlite::admin::PublicCounts;
+use rbit_storage::sqlite::{admin::AdminStore, instance::InstanceSettingsStore};
+
+use crate::{ServiceContext, ServiceError};
+
+/// Bounds on the site name, which appears in every page title and the PWA manifest.
+pub use rbit_core::instance::SITE_NAME_MAX_LEN;
+
+/// Storage keys. Renaming one orphans existing overrides, so treat them as a format.
+mod key {
+    pub const BRANDING: &str = "branding";
+    pub const SITE_NAME: &str = "site_name";
+    pub const REGISTRATION: &str = "registration";
+    pub const ORG_CREATION: &str = "org_creation";
+    pub const DEFAULT_VISIBILITY: &str = "default_visibility";
+    pub const DIGEST_HOUR: &str = "digest_hour";
+    pub const EXPLORE: &str = "explore";
+    pub const REQUIRE_SIGN_IN: &str = "require_sign_in";
+}
+
+#[derive(Debug, Clone)]
+pub struct InstanceService {
+    store: InstanceSettingsStore,
+    counts: AdminStore,
+    settings: Arc<RwLock<InstanceSettings>>,
+}
+
+impl InstanceService {
+    /// Loads the effective settings (config defaults merged with stored overrides).
+    pub(crate) async fn load(ctx: &ServiceContext) -> Result<Self, ServiceError> {
+        let store = ctx.database.instance_settings();
+        let mut settings = InstanceSettings::defaults(&ctx.config);
+        for (key, value) in store.load().await? {
+            apply_override(&mut settings, &key, &value);
+        }
+        Ok(Self { store, counts: ctx.database.admin(), settings: Arc::new(RwLock::new(settings)) })
+    }
+
+    /// A snapshot of the current settings. Cheap; safe to call on every request.
+    pub fn current(&self) -> InstanceSettings {
+        self.settings.read().map_or_else(|poisoned| poisoned.into_inner().clone(), |s| s.clone())
+    }
+
+    /// Whether only signed-in users may browse. Cheaper than [`Self::current`]: checked by
+    /// every anonymous request.
+    pub fn require_sign_in(&self) -> bool {
+        self.settings.read().map_or_else(|poisoned| poisoned.into_inner().require_sign_in, |s| s.require_sign_in)
+    }
+
+    /// Public repositories, active users and organisations, for the front page. One cheap
+    /// query; it reveals nothing a visitor could not count by browsing.
+    pub async fn public_counts(&self) -> Result<PublicCounts, ServiceError> {
+        Ok(self.counts.public_counts().await?)
+    }
+
+    /// Persists `new` as the instance settings and makes it effective immediately.
+    /// Site administrators only; the site name is trimmed and must be 1–50 characters.
+    pub async fn update(&self, actor: &User, new: InstanceSettings) -> Result<(), ServiceError> {
+        if !actor.is_admin {
+            return Err(ServiceError::Forbidden);
+        }
+        new.branding.validate().map_err(ServiceError::Invalid)?;
+        if new.digest_hour > MAX_DIGEST_HOUR {
+            return Err(ServiceError::Invalid(format!("the digest hour must be between 0 and {MAX_DIGEST_HOUR}")));
+        }
+        let digest_hour = new.digest_hour.to_string();
+        let explore = new.explore_enabled.to_string();
+        let require_sign_in = new.require_sign_in.to_string();
+        let branding = serde_json::to_string(&new.branding).map_err(ServiceError::internal)?;
+        let new = InstanceSettings { site_name: validate_site_name(&new.site_name)?, ..new };
+
+        self.store
+            .save(&[
+                (key::SITE_NAME, new.site_name.as_str()),
+                (key::BRANDING, branding.as_str()),
+                (key::REGISTRATION, new.registration.as_str()),
+                (key::ORG_CREATION, new.org_creation.as_str()),
+                (key::DEFAULT_VISIBILITY, new.default_visibility.as_str()),
+                (key::DIGEST_HOUR, digest_hour.as_str()),
+                (key::EXPLORE, explore.as_str()),
+                (key::REQUIRE_SIGN_IN, require_sign_in.as_str()),
+            ])
+            .await?;
+
+        tracing::info!(
+            admin = %actor.name(),
+            site_name = %new.site_name,
+            registration = new.registration.as_str(),
+            org_creation = new.org_creation.as_str(),
+            default_visibility = new.default_visibility.as_str(),
+            digest_hour = new.digest_hour,
+            explore_enabled = new.explore_enabled,
+            require_sign_in = new.require_sign_in,
+            "instance settings updated"
+        );
+        match self.settings.write() {
+            Ok(mut current) => *current = new,
+            Err(poisoned) => *poisoned.into_inner() = new,
+        }
+        Ok(())
+    }
+}
+
+/// Trims and checks a site name: 1–50 characters, no control characters (the rule is
+/// shared with the deployment configuration document in `rbit-core`).
+pub fn validate_site_name(name: &str) -> Result<String, ServiceError> {
+    rbit_core::instance::checked_site_name(name).map_err(ServiceError::Invalid)
+}
+
+/// Applies one stored override. Unknown keys and unparsable values are ignored (and
+/// logged), so a bad row can never stop the instance from starting.
+fn apply_override(settings: &mut InstanceSettings, key: &str, value: &str) {
+    let applied = match key {
+        key::BRANDING => serde_json::from_str::<rbit_core::config::BrandingConfig>(value)
+            .ok()
+            .filter(|branding| branding.validate().is_ok())
+            .map(|branding| settings.branding = branding),
+        "deployment_config" | "require_two_factor" => Some(()),
+        key::SITE_NAME => validate_site_name(value).ok().map(|name| settings.site_name = name),
+        key::REGISTRATION => RegistrationMode::parse(value).map(|mode| settings.registration = mode),
+        key::ORG_CREATION => OrgCreationPolicy::parse(value).map(|policy| settings.org_creation = policy),
+        key::DEFAULT_VISIBILITY => Visibility::parse(value).map(|visibility| settings.default_visibility = visibility),
+        key::DIGEST_HOUR => value.parse::<u8>().ok().filter(|hour| *hour <= MAX_DIGEST_HOUR).map(|hour| settings.digest_hour = hour),
+        key::EXPLORE => value.parse::<bool>().ok().map(|enabled| settings.explore_enabled = enabled),
+        key::REQUIRE_SIGN_IN => value.parse::<bool>().ok().map(|required| settings.require_sign_in = required),
+        _ => None,
+    }
+    .is_some();
+    if !applied {
+        tracing::warn!(key, value, "ignoring invalid instance setting override");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rbit_core::Config;
+
+    use super::*;
+
+    #[test]
+    fn site_name_validation() {
+        assert_eq!(validate_site_name("  Forge  ").unwrap(), "Forge");
+        assert!(validate_site_name("   ").is_err());
+        assert!(validate_site_name(&"x".repeat(51)).is_err());
+        assert_eq!(validate_site_name(&"é".repeat(50)).unwrap().chars().count(), 50);
+        assert!(validate_site_name("a\nb").is_err());
+    }
+
+    #[test]
+    fn overrides_merge_over_defaults_and_ignore_garbage() {
+        let mut settings = InstanceSettings::defaults(&Config::default());
+        apply_override(&mut settings, "site_name", "Forge");
+        apply_override(&mut settings, "registration", "closed");
+        apply_override(&mut settings, "org_creation", "admins_only");
+        apply_override(&mut settings, "default_visibility", "private");
+        apply_override(&mut settings, "default_visibility", "secret");
+        apply_override(&mut settings, "digest_hour", "19");
+        apply_override(&mut settings, "digest_hour", "24");
+        apply_override(&mut settings, "explore", "false");
+        apply_override(&mut settings, "explore", "off");
+        apply_override(&mut settings, "require_sign_in", "true");
+        apply_override(&mut settings, "require_sign_in", "yes");
+        apply_override(&mut settings, "site_name", "");
+        apply_override(&mut settings, "unknown", "value");
+
+        assert_eq!(
+            settings,
+            InstanceSettings {
+                site_name: "Forge".to_owned(),
+                branding: rbit_core::config::BrandingConfig::default(),
+                registration: RegistrationMode::Closed,
+                explore_enabled: false,
+                require_sign_in: true,
+                org_creation: OrgCreationPolicy::AdminsOnly,
+                default_visibility: Visibility::Private,
+                digest_hour: 19,
+            }
+        );
+    }
+}

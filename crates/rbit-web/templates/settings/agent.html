@@ -1,0 +1,17 @@
+{% extends "settings/layout.html" %}
+{% import "macros.html" as ui %}
+{% block settings_content %}
+<a class="btn btn-ghost" href="/settings/agents">{% call ui::localized(AgentsMessage::Back.text(page.locale)) %}{% endcall %}</a>
+<h2 class="mt-4 text-xl font-semibold">{% if is_new %}{% call ui::localized(AgentsMessage::New.text(page.locale)) %}{% endcall %}{% else %}{% call ui::localized(AgentsMessage::Edit.text(page.locale)) %}{% endcall %}{% endif %}</h2>
+{% if !is_new %}<p class="hint mt-2">{% call ui::localized(AgentsMessage::Handle.text(page.locale)) %}{% endcall %}</p><p class="break-words font-mono" dir="ltr">{{ handle }}</p><p class="mt-2"><span class="badge">{% if form.enabled %}{% call ui::localized(AgentsMessage::Enabled.text(page.locale)) %}{% endcall %}{% else %}{% call ui::localized(AgentsMessage::Disabled.text(page.locale)) %}{% endcall %}{% endif %}</span></p>{% endif %}
+{% if let Some(created) = created %}<section class="box mt-5 p-4" hx-history="false"><label class="label" for="agent-secret">{% call ui::localized(rbit_localization::settings::tokens::TokensMessage::CopyNow.text(page.locale)) %}{% endcall %}</label><div class="flex" dir="ltr"><input id="agent-secret" class="input min-w-0 rounded-e-none font-mono" value="{{ created.secret }}" readonly autocomplete="off" spellcheck="false"><button class="btn btn-icon rounded-s-none" type="button" data-copy="agent-secret" aria-label="{{ rbit_localization::settings::tokens::TokensMessage::CopyToken.text(page.locale) }}">{% call ui::icon("copy", "size-4") %}{% endcall %}</button></div></section>{% endif %}
+<form method="post" action="{{ action }}" class="box mt-5 p-4">
+{% call ui::form_error(error) %}{% endcall %}<input type="hidden" name="revision" value="{{ form.revision }}">
+{% include "settings/agent_fields.html" %}
+<button class="btn btn-primary mt-5 w-full sm:w-auto" type="submit">{% if is_new %}{% call ui::localized(AgentsMessage::New.text(page.locale)) %}{% endcall %}{% else %}{% call ui::localized(AgentsMessage::Save.text(page.locale)) %}{% endcall %}{% endif %}</button>
+</form>
+{% if !is_new %}
+<form method="post" action="{{ action }}/disable" class="mt-4"><input type="hidden" name="revision" value="{{ form.revision }}"><button class="btn h-auto min-h-11 whitespace-normal py-2" type="submit">{% call ui::localized(AgentsMessage::Disable.text(page.locale)) %}{% endcall %}</button></form>
+{% include "settings/agent_credentials.html" %}
+{% endif %}
+{% endblock %}

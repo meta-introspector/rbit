@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "org/nav_context.html" %}{% endblock %}
+{% block content %}
+{% include "org/header.html" %}
+<section class="mt-6" >
+<h2 class="text-xl font-semibold">{% call ui::localized(OrgMessage::Projects.text(page.locale)) %}{% endcall %}</h2>
+<p class="hint">{% call ui::localized(OrgMessage::ProjectIntro.text(page.locale)) %}{% endcall %}</p>
+<ul class="box mt-4">
+{% for board in boards %}<li class="row"><a href="{{ base }}/{{ board.id }}" class="font-medium break-words">{{ board.title }}</a></li>{% endfor %}
+{% if boards.is_empty() %}<li class="row text-ink-muted">{% call ui::localized(OrgMessage::ProjectEmpty.text(page.locale)) %}{% endcall %}</li>{% endif %}
+</ul>
+{% if can_manage %}
+<details class="box mt-6 p-4"><summary class="cursor-pointer font-medium">{% call ui::localized(OrgMessage::ProjectNew.text(page.locale)) %}{% endcall %}</summary>
+<form method="post" action="{{ base }}" class="mt-4 max-w-xl">
+<label class="label" for="project-title">{% call ui::localized(OrgMessage::ProjectName.text(page.locale)) %}{% endcall %}</label><input id="project-title" class="input" name="title" maxlength="120" required>
+<label class="label mt-4" for="project-columns">{% call ui::localized(OrgMessage::ProjectColumns.text(page.locale)) %}{% endcall %}</label><textarea id="project-columns" class="input" name="columns" rows="4" required>{{ OrgMessage::ProjectDefaultColumns.text(page.locale) }}</textarea>
+<p class="hint">{% call ui::localized(OrgMessage::ProjectColumnsHint.text(page.locale)) %}{% endcall %}</p>
+<button class="btn btn-primary mt-4" type="submit">{% call ui::localized(OrgMessage::ProjectCreate.text(page.locale)) %}{% endcall %}</button>
+</form></details>
+{% endif %}
+</section>
+{% endblock %}

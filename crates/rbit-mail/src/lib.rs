@@ -1,0 +1,24 @@
+//! # rbit-mail
+//!
+//! Outgoing email: message rendering and delivery transports.
+//!
+//! * [`messages`] — every email rbit sends, rendered from Askama templates kept in this
+//!   crate (`templates/`), each with a plain-text and an HTML part.
+//! * [`Mailer`] — the delivery seam, with an SMTP transport ([`SmtpMailer`], lettre over
+//!   rustls), a log transport for development ([`LogMailer`]), a transport that refuses
+//!   everything ([`DisabledMailer`]) and an in-memory one for tests ([`MemoryMailer`]).
+//!
+//! The crate knows nothing about accounts or tokens: callers decide *what* to say and
+//! *to whom*; this crate turns that into a MIME message and delivers it.
+//!
+//! Content-bearing message, envelope, header and transport `Debug` output is opaque.
+//! This does not redact explicit data access, MIME output, error `Display` text or
+//! the development [`LogMailer`], which intentionally records full messages and links.
+
+mod error;
+pub mod messages;
+mod transport;
+
+pub use error::MailError;
+pub use messages::{Mail, MailMessage};
+pub use transport::{DisabledMailer, LogMailer, Mailer, MemoryMailer, SendFuture, Sender, SmtpMailer, from_config};

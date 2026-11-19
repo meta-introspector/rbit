@@ -1,0 +1,387 @@
+//! The administrator configures the instance using ordinary HTML forms, without JavaScript.
+use std::{collections::BTreeMap, sync::Arc};
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode, header},
+    response::Response,
+};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use rbit_core::{Config, User};
+use rbit_services::{Services, SignUp};
+use rbit_storage::{Database, KvStore};
+use rbit_web::AppState;
+use tower::ServiceExt;
+
+struct Fixture {
+    _directory: tempfile::TempDir,
+    database: Database,
+    services: Services,
+    router: Router,
+    admin: User,
+    cookie: String,
+    restart: Option<tokio::sync::watch::Receiver<bool>>,
+}
+
+impl Fixture {
+    async fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.storage.data_dir = directory.path().join("data");
+        config.security.rate_limit = false;
+        std::fs::create_dir_all(config.storage.repositories_dir()).unwrap();
+        let database = Database::open(&config.storage.sqlite_path()).await.unwrap();
+        let kv = KvStore::open(&config.storage.kv_path()).unwrap();
+        let config = Arc::new(config);
+        let services = Services::new(config.clone(), &database, &kv).await.unwrap();
+        let admin = services
+            .accounts
+            .create_user(
+                SignUp { username: "root".into(), email: "root@example.com".into(), password: "correct horse battery".into() },
+                Some(true),
+            )
+            .await
+            .unwrap();
+        let token = services.accounts.start_session(&admin).await.unwrap();
+        let cookie = format!("rbit_session={}", token.encode());
+        let state = AppState::new(config, services.clone());
+        let restart = Some(state.restart.subscribe());
+        let router = rbit_web::router(state);
+        Self { _directory: directory, database, services, router, admin, cookie, restart }
+    }
+
+    async fn get(&self, section: &str) -> Response {
+        self.router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/configuration?section={section}"))
+                    .header(header::COOKIE, &self.cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn post(&self, inputs: &BTreeMap<String, String>) -> Response {
+        let body = inputs
+            .iter()
+            .map(|(key, value)| format!("{}={}", utf8_percent_encode(key, NON_ALPHANUMERIC), utf8_percent_encode(value, NON_ALPHANUMERIC)))
+            .collect::<Vec<_>>()
+            .join("&");
+        self.router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/configuration")
+                    .header(header::COOKIE, &self.cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::HOST, "localhost:3000")
+                    .header(header::ORIGIN, "http://localhost:3000")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn saved(&self) -> serde_json::Value {
+        let document =
+            self.database.instance_settings().load().await.unwrap().into_iter().find(|(key, _)| key == "deployment_config").unwrap().1;
+        let mut value = serde_json::from_str(&document).unwrap();
+        // Secret fields are stored sealed; compare them as the server reads them.
+        self.database.sealing_key().open_secret_fields(&mut value).unwrap();
+        value
+    }
+}
+
+async fn html(response: Response) -> String {
+    String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
+}
+
+#[tokio::test]
+async fn restart_requires_an_admin_confirmation_and_same_origin_and_records_an_audit_event() {
+    let fixture = Fixture::new().await;
+    let request = |method: &str, path: &str, cookie: &str, origin: &str, body: &str| {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::COOKIE, cookie)
+            .header(header::HOST, "localhost:3000")
+            .header(header::ORIGIN, origin)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body.to_owned()))
+            .unwrap()
+    };
+    let send = |method, path, cookie, origin, body| fixture.router.clone().oneshot(request(method, path, cookie, origin, body));
+    let response = send("GET", "/admin/restart", &fixture.cookie, "http://localhost:3000", "").await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(html(response).await.contains("Restart this rbit application?"));
+    assert!(!*fixture.restart.as_ref().unwrap().borrow());
+    let response = send("POST", "/admin/restart", "", "http://localhost:3000", "confirmation=restart").await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let response = send("POST", "/admin/restart", &fixture.cookie, "https://another.example", "confirmation=restart").await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = send("POST", "/admin/restart", &fixture.cookie, "http://localhost:3000", "confirmation=no").await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(!*fixture.restart.as_ref().unwrap().borrow());
+
+    let member = fixture
+        .services
+        .accounts
+        .create_user(
+            SignUp { username: "member".into(), email: "member@example.com".into(), password: "correct horse battery".into() },
+            Some(false),
+        )
+        .await
+        .unwrap();
+    let token = fixture.services.accounts.start_session(&member).await.unwrap();
+    let cookie = format!("rbit_session={}", token.encode());
+    for (method, path) in [("GET", "/admin/restart"), ("POST", "/admin/restart"), ("GET", "/admin/restart/status")] {
+        assert_eq!(
+            send(method, path, &cookie, "http://localhost:3000", "confirmation=restart").await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    let response = send("POST", "/admin/restart", &fixture.cookie, "http://localhost:3000", "confirmation=restart").await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert!(html(response).await.contains("Restart requested"));
+    assert!(*fixture.restart.as_ref().unwrap().borrow());
+    let audit = fixture.services.audit.recent_for(&fixture.admin, 10).await.unwrap();
+    assert!(audit.iter().any(|event| event.action == rbit_services::audit::AuditAction::ServerRestartRequested));
+    let response = send("GET", "/admin/restart/status", &fixture.cookie, "http://localhost:3000", "").await.unwrap();
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert!(html(response).await.contains(r#""restarting":true"#));
+}
+
+#[tokio::test]
+async fn an_embedded_host_without_a_restart_receiver_reports_unavailable() {
+    let mut fixture = Fixture::new().await;
+    fixture.restart.take();
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/restart")
+                .header(header::COOKIE, &fixture.cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("confirmation=restart"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(html(response).await.contains("Restart is unavailable"));
+}
+
+#[tokio::test]
+async fn monitoring_is_admin_only_uncached_and_does_not_render_the_full_dashboard() {
+    let fixture = Fixture::new().await;
+    let request = |cookie: &str| Request::builder().uri("/admin/monitoring").header(header::COOKIE, cookie).body(Body::empty()).unwrap();
+    let anonymous = fixture.router.clone().oneshot(request("")).await.unwrap();
+    assert_eq!(anonymous.status(), StatusCode::SEE_OTHER);
+    let user = fixture
+        .services
+        .accounts
+        .create_user(
+            SignUp { username: "member".into(), email: "member@example.com".into(), password: "correct horse battery".into() },
+            Some(false),
+        )
+        .await
+        .unwrap();
+    let token = fixture.services.accounts.start_session(&user).await.unwrap();
+    let cookie = format!("rbit_session={}", token.encode());
+    let denied = fixture.router.clone().oneshot(request(&cookie)).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    assert!(!html(denied).await.contains("<div data-monitoring-snapshot>"));
+
+    let response = fixture.router.clone().oneshot(request(&fixture.cookie)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert!(!response.headers().contains_key(header::ETAG));
+    let content = html(response).await;
+    assert!(content.contains("<div data-monitoring-snapshot>"));
+    assert!(content.contains("Request traffic") && content.contains("Response time"));
+    assert!(content.contains("HTTP responses") && content.contains("Git activity"));
+    assert!(!content.contains("<!doctype") && !content.contains("Data directory"));
+
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(Request::builder().uri("/admin").header(header::COOKIE, &fixture.cookie).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let content = html(response).await;
+    assert!(content.contains("data-admin-monitoring"));
+    assert!(content.contains("<div data-monitoring-snapshot>"));
+    assert!(content.contains("admin-monitoring.js?v="));
+}
+
+fn mail_inputs() -> BTreeMap<String, String> {
+    [
+        ("section", "mail"),
+        ("action", "save"),
+        ("transport", "smtp"),
+        ("from_address", "git@example.com"),
+        ("from_name", "Company Git"),
+        ("smtp_host", "smtp.example.com"),
+        ("smtp_port", "587"),
+        ("smtp_security", "starttls"),
+        ("smtp_username", "git@example.com"),
+        ("smtp_password", ""),
+        ("timeout_seconds", "30"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.into(), value.into()))
+    .collect()
+}
+
+#[tokio::test]
+async fn every_section_renders_labeled_controls_without_a_json_editor() {
+    let fixture = Fixture::new().await;
+    for section in [
+        "server",
+        "storage",
+        "security",
+        "repository",
+        "mail",
+        "ssh",
+        "auth",
+        "branding",
+        "notifications",
+        "operations",
+        "api",
+        "webhooks",
+        "releases",
+        "mirrors",
+        "push_mirrors",
+        "imports",
+        "issues",
+        "pulls",
+        "editor",
+        "lfs",
+        "actions",
+    ] {
+        let response = fixture.get(section).await;
+        assert_eq!(response.status(), StatusCode::OK, "{section}");
+        let markup = html(response).await;
+        assert!(markup.contains("Configuration sections") && markup.contains("aria-describedby=\"hint-"));
+        assert!(markup.contains("href=\"/admin/restart\"") && markup.contains("Restart server"), "{section}");
+        assert!(!markup.contains("name=\"document\"") && !markup.contains("Deployment configuration (JSON)"));
+        if section == "storage" {
+            assert!(markup.contains("readonly") && !markup.contains("Save Storage settings"));
+        }
+        if section == "mail" {
+            assert!(markup.contains("<select") && markup.contains("type=\"password\""));
+        }
+        if section == "auth" {
+            assert!(markup.contains("Add identity provider"));
+        }
+    }
+    assert_eq!(fixture.get("not-a-section").await.status(), StatusCode::NOT_FOUND);
+    assert!(!*fixture.restart.as_ref().unwrap().borrow(), "viewing configuration never requests a restart");
+}
+
+#[tokio::test]
+async fn section_saves_preserve_unrelated_settings_and_handle_credentials() {
+    let fixture = Fixture::new().await;
+    let mut initial: serde_json::Value =
+        serde_json::from_str(&fixture.services.admin.configuration(&fixture.admin).await.unwrap()).unwrap();
+    initial["repository"]["default_branch"] = "trunk".into();
+    initial["mail"]["smtp_password"] = "original-smtp-secret".into();
+    fixture.services.admin.stage_configuration(&fixture.admin, &initial.to_string()).await.unwrap();
+    // Offline storage moves leave old paths in previously saved deployment snapshots.
+    initial["storage"]["data_dir"] = "old-data-location".into();
+    fixture.database.instance_settings().save(&[("deployment_config", &initial.to_string())]).await.unwrap();
+    assert!(!html(fixture.get("storage").await).await.contains("old-data-location"));
+    let mut inputs = mail_inputs();
+    let response = fixture.post(&inputs).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], "/admin/configuration?section=mail&saved=1");
+    let saved = fixture.saved().await;
+    assert_eq!(saved["repository"]["default_branch"], "trunk");
+    assert_eq!(saved["mail"]["smtp_password"], "original-smtp-secret");
+    assert_eq!(saved["mail"]["smtp_port"], 587);
+    assert_ne!(saved["storage"]["data_dir"], "old-data-location");
+    let markup = html(fixture.get("mail").await).await;
+    assert!(markup.contains("Configured") && !markup.contains("original-smtp-secret") && !markup.contains("&lt;unchanged&gt;"));
+    inputs.insert("smtp_password".into(), "replacement-secret".into());
+    assert_eq!(fixture.post(&inputs).await.status(), StatusCode::SEE_OTHER);
+    assert_eq!(fixture.saved().await["mail"]["smtp_password"], "replacement-secret");
+    inputs.insert("smtp_password".into(), String::new());
+    inputs.insert("clear.smtp_password".into(), "true".into());
+    assert_eq!(fixture.post(&inputs).await.status(), StatusCode::SEE_OTHER);
+    assert_eq!(fixture.saved().await["mail"]["smtp_password"], "");
+}
+
+#[tokio::test]
+async fn validation_preserves_ordinary_input_without_echoing_new_secrets_or_persisting_changes() {
+    let fixture = Fixture::new().await;
+    let mut inputs = mail_inputs();
+    inputs.insert("smtp_port".into(), "70000".into());
+    inputs.insert("from_name".into(), "Keep this sender name".into());
+    inputs.insert("smtp_password".into(), "never-echo-this-secret".into());
+    let response = fixture.post(&inputs).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let markup = html(response).await;
+    assert!(markup.contains("Keep this sender name") && markup.contains("SMTP port must be a whole number"));
+    assert!(!markup.contains("never-echo-this-secret"));
+    assert_eq!(fixture.database.instance_settings().load().await.unwrap(), [] as [(String, String); 0]);
+    inputs.insert("smtp_port".into(), "587".into());
+    inputs.insert("smtp_host".into(), String::new());
+    let response = fixture.post(&inputs).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!html(response).await.contains("never-echo-this-secret"));
+}
+
+#[tokio::test]
+async fn provider_add_and_remove_are_unsaved_drafts_until_save() {
+    let fixture = Fixture::new().await;
+    let mut inputs: BTreeMap<String, String> =
+        [("section", "auth"), ("timeout_seconds", "10"), ("provider_count", "0"), ("action", "add_provider")]
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect();
+    let response = fixture.post(&inputs).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let markup = html(response).await;
+    assert!(markup.contains("providers.0.client_secret") && markup.contains("Remove provider"));
+    assert_eq!(fixture.database.instance_settings().load().await.unwrap(), [] as [(String, String); 0]);
+    for (key, value) in [
+        ("provider_count", "1"),
+        ("action", "save"),
+        ("providers.0.kind", "github"),
+        ("providers.0.id", "company"),
+        ("providers.0.name", "Company SSO"),
+        ("providers.0.issuer", ""),
+        ("providers.0.base_url", ""),
+        ("providers.0.client_id", "client-id"),
+        ("providers.0.client_secret", "sso-private-secret"),
+        ("providers.0.scopes", ""),
+        ("default.providers.0.scopes", "true"),
+        ("providers.0.allow_registration", "false"),
+    ] {
+        inputs.insert(key.into(), value.into());
+    }
+    assert_eq!(fixture.post(&inputs).await.status(), StatusCode::SEE_OTHER);
+    assert_eq!(fixture.saved().await["auth"]["providers"][0]["client_secret"], "sso-private-secret");
+    assert!(!html(fixture.get("auth").await).await.contains("sso-private-secret"));
+    inputs.insert("providers.0.client_secret".into(), String::new());
+    inputs.insert("action".into(), "remove_provider:0".into());
+    assert_eq!(fixture.post(&inputs).await.status(), StatusCode::OK);
+    assert_eq!(fixture.saved().await["auth"]["providers"].as_array().unwrap().len(), 1);
+    inputs.retain(|key, _| !key.starts_with("providers.") && !key.starts_with("default.providers."));
+    inputs.insert("provider_count".into(), "0".into());
+    inputs.insert("action".into(), "save".into());
+    assert_eq!(fixture.post(&inputs).await.status(), StatusCode::SEE_OTHER);
+    assert_eq!(fixture.saved().await["auth"]["providers"].as_array().unwrap().as_slice(), [] as [serde_json::Value; 0]);
+}
+
+mod password_changes;

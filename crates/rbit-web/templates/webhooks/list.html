@@ -1,0 +1,50 @@
+{% extends "webhooks/layout.html" %}
+{% import "macros.html" as ui %}
+{% block hooks_content %}
+<div class="mt-1 flex items-start justify-between gap-4">
+  <div class="min-w-0">
+    <h1 class="text-xl font-semibold tracking-tight">{% call ui::localized(WebhookMessage::Webhooks.text(page.locale)) %}{% endcall %}</h1>
+    {% let intro = rbit_localization::settings::webhooks::WebhookSentence::Intro { organization: frame.org.is_some() }.rich(page.locale) %}
+    <p class="mt-1 text-[13px] text-ink-muted"{% if intro.fallback() %} lang="en"{% endif %}>{% for part in intro.parts() %}{% if part.is_slot(0) %}{{ page.site_name }}{% else if part.is_slot(1) %}<span class="font-mono text-ink" dir="ltr">POST</span>{% else if part.is_slot(2) %}<span class="text-ink">{{ frame.name }}</span>{% else %}{{ part.text() }}{% endif %}{% endfor %}</p>
+  </div>
+  {% if can_add %}
+  <a href="{{ new_url }}" class="btn btn-primary shrink-0">{% call ui::icon("plus", "size-3.5") %}{% endcall %}{% call ui::localized(WebhookMessage::AddWebhook.text(page.locale)) %}{% endcall %}</a>
+  {% endif %}
+</div>
+{% if !can_add %}
+<p class="mt-4 text-[13px] text-ink-muted">{% call ui::localized(self.maximum_text()) %}{% endcall %}</p>
+{% endif %}
+
+<div class="box mt-6">
+  {% if hooks.is_empty() %}
+  {% call ui::empty_state("webhook", WebhookMessage::NoWebhooks.text(page.locale), WebhookMessage::NoWebhooksText.text(page.locale)) %}{% endcall %}
+  {% else %}
+  <ul>
+    {% for hook in hooks %}
+    <li class="border-b border-line last:border-b-0">
+      <a href="{{ hook.edit_url }}" class="flex items-start gap-3 px-4 py-3 hover:bg-subtle">
+        {% call ui::icon("webhook", "mt-0.5 size-4 shrink-0 text-ink-faint") %}{% endcall %}
+        <span class="min-w-0 flex-1">
+          <span class="flex min-w-0 items-center gap-2">
+            <span class="truncate font-medium">{{ hook.host }}</span>
+            {% if !hook.active %}<span class="badge">{% call ui::localized(WebhookMessage::Inactive.text(page.locale)) %}{% endcall %}</span>{% endif %}
+          </span>
+          <span class="mt-0.5 block truncate font-mono text-xs text-ink-muted"><bdi dir="ltr">{{ hook.url }}</bdi></span>
+          <span class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-muted">
+            <span>{{ hook.events }}</span>
+            {% if let Some(last) = hook.last %}
+            <span class="badge {{ last.class }}">{{ last.label }}</span>
+            {% if let Some(at) = hook.last_at %}<time datetime="{{ hook.last_iso }}">{% call ui::localized(at.relative(page.locale)) %}{% endcall %}</time>{% endif %}
+            {% else %}
+            <span>{% call ui::localized(WebhookMessage::NoDeliveries.text(page.locale)) %}{% endcall %}</span>
+            {% endif %}
+          </span>
+        </span>
+        {% call ui::icon("chevron-right", "mt-0.5 size-4 shrink-0 text-ink-faint") %}{% endcall %}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endblock %}

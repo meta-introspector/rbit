@@ -1,0 +1,32 @@
+# Rust
+/target
+/.cargo-build
+/worktrees/
+/.build-cache/
+/.worktree-state/
+
+# Front-end tooling (build-time only)
+/node_modules
+/.actions-visual-control/
+/actions-visual-artifacts/
+/.actions-production-control/
+/actions-production-artifacts/
+/actions-production-fixture/
+
+# Generated stylesheets: run `npm run build:css`
+/crates/rbit-web/assets/app.css
+/crates/rbit-web/assets/deferred.css
+
+# Local runtime data (SQLite, redb, repositories)
+/data
+/data-live
+/data-alt
+/rbit.toml
+# The config file name from before the rename to rbit; still kept out of commits.
+/rustit.toml
+
+# Release archives (assembled by .github/workflows/release.yml)
+/dist
+
+# Agent worktrees (temporary checkouts of feature branches)
+/.claude/worktrees/

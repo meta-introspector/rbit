@@ -1,0 +1,178 @@
+//! Wiring: open storage, build services, run the HTTP server, shut down cleanly.
+
+use std::sync::Arc;
+
+use anyhow::Context;
+use axum::serve::{ListenerExt, TapIo};
+use rbit_core::Config;
+use rbit_services::Services;
+use rbit_storage::{Database, KvStore};
+use tokio::net::{TcpListener, TcpStream};
+
+mod runtime;
+mod session_purger;
+use session_purger::spawn_session_purger;
+
+/// Opened persistent stores.
+struct Storage {
+    database: Database,
+    kv: KvStore,
+}
+
+async fn open_storage(config: &Config) -> anyhow::Result<Storage> {
+    let database = open_database(config).await?;
+    let kv = KvStore::open(&config.storage.kv_path()).context("cannot open key/value store")?;
+    Ok(Storage { database, kv })
+}
+
+/// Opens (and migrates) only the `SQLite` database. The CLI commands use this alone:
+/// the key/value store is held exclusively by a running server, `SQLite` is not.
+pub(crate) async fn open_database(config: &Config) -> anyhow::Result<Database> {
+    let storage = &config.storage;
+    tokio::fs::create_dir_all(storage.repositories_dir())
+        .await
+        .with_context(|| format!("cannot create data directory {}", storage.data_dir.display()))?;
+    Database::open_with_key_file(&storage.sqlite_path(), &storage.secret_key_path()).await.context("cannot open SQLite database")
+}
+
+pub async fn run(config: Config) -> anyhow::Result<bool> {
+    // Refuse to start rather than fail every page.
+    rbit_web::assets::ensure_built().map_err(anyhow::Error::msg)?;
+    let config = Arc::new(config);
+    let storage = open_storage(&config).await?;
+
+    // Bind before composing features or starting long-lived tasks. A bind error must not
+    // leave background subscribers or an SSH listener behind in an embedding runtime.
+    let listener =
+        http_listener(TcpListener::bind(config.server.bind).await.with_context(|| format!("cannot bind {}", config.server.bind))?);
+    let services = Services::new(Arc::clone(&config), &storage.database, &storage.kv).await?;
+
+    let purger = spawn_session_purger(services.accounts.clone());
+    services.spawn_background();
+    let release_checks = crate::updates::start(&config.updates, services.updates.clone());
+    let background = services.clone();
+    let state = runtime::state(Arc::clone(&config), services);
+    let mut restart = state.restart.subscribe();
+    let ssh = crate::ssh::start(&config, &background, restart.clone(), purger.stop_signal());
+    let app = rbit_web::router(state);
+    tracing::info!(address = %config.server.bind, public_url = %config.server.public_url, data_dir = %config.storage.data_dir.display(), process_id = std::process::id(), "rbit is listening");
+    log_setup_token(&config, &background);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let served = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .with_graceful_shutdown(async move {
+            let restarting = tokio::select! {
+                () = shutdown_signal() => false,
+                result = restart.wait_for(|requested| *requested) => result.is_ok(),
+            };
+            let _ = shutdown_tx.send(restarting);
+        })
+        .await
+        .context("server error");
+
+    tracing::info!("shutting down");
+    purger.request_stop();
+    purger.shutdown().await;
+    if purger.state() == rbit_kernel::TaskState::Failed {
+        tracing::error!("session purger failed before shutdown completed");
+    }
+    if let Some(ssh) = ssh
+        && let Err(error) = ssh.await
+    {
+        tracing::warn!(%error, "SSH host task failed during shutdown");
+    }
+    // Stop background work before closing the stores it writes to.
+    tokio::join!(crate::updates::shutdown(&release_checks), background.shutdown());
+    storage.database.close().await;
+    served?;
+    Ok(shutdown_rx.await.unwrap_or(false))
+}
+
+/// On an instance without users, prints what the first (administrator) sign-up needs.
+fn log_setup_token(config: &Config, services: &Services) {
+    let Some(token) = services.accounts.setup_token() else { return };
+    let url = format!("{}/signup", config.server.public_url.trim_end_matches('/'));
+    // A configured token is already known to whoever deploys the server.
+    let token = if config.security.setup_token.as_deref().is_some_and(|configured| configured.trim() == token) {
+        "(security.setup_token)"
+    } else {
+        token
+    };
+    tracing::warn!(
+        setup_url = %url,
+        setup_token = %token,
+        "no account exists yet: sign up at the setup URL with this setup token to create the administrator \
+         (or run `rbit user create <name> <email> --admin`)"
+    );
+}
+
+pub async fn migrate(config: Config) -> anyhow::Result<()> {
+    let database = open_database(&config).await?;
+    database.close().await;
+    tracing::info!("database is up to date");
+    Ok(())
+}
+
+/// Accepted connections with Nagle's algorithm off. Responses are written in several
+/// small pieces (headers, then body frames); with Nagle on, a piece that follows an
+/// unacknowledged one waits for the peer's delayed ACK before it is sent.
+fn http_listener(listener: TcpListener) -> TapIo<TcpListener, fn(&mut TcpStream)> {
+    listener.tap_io(disable_nagle as fn(&mut TcpStream))
+}
+
+fn disable_nagle(stream: &mut TcpStream) {
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::debug!(%error, "cannot set TCP_NODELAY on an accepted connection");
+    }
+}
+
+/// Resolves on Ctrl+C, or SIGTERM on Unix (as sent by systemd and container runtimes).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            signal.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::serve::Listener as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn accepted_connections_disable_nagle() {
+        let mut listener = http_listener(TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let address = listener.local_addr().unwrap();
+        let _client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (stream, _) = listener.accept().await;
+        assert!(stream.nodelay().unwrap());
+    }
+
+    #[tokio::test]
+    async fn bind_failure_does_not_leave_background_owners_holding_stores() {
+        let dir = tempfile::tempdir().unwrap();
+        let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = Config::default();
+        config.storage.data_dir = dir.path().to_path_buf();
+        config.server.bind = occupied.local_addr().unwrap();
+        let kv_path = config.storage.kv_path();
+        let error = run(config).await.unwrap_err();
+        assert!(error.to_string().contains("cannot bind"), "{error:#}");
+        // A spawned subscriber/purger would retain redb's exclusive open handle.
+        KvStore::open(&kv_path).unwrap();
+    }
+}

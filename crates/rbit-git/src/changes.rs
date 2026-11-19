@@ -1,0 +1,345 @@
+//! Commit details (what a commit changed) and branch/tag listings.
+
+use std::ops::ControlFlow;
+
+use gix::{ObjectId, bstr::ByteSlice, objs::tree::EntryMode};
+
+use crate::{
+    ChangeStatus, CommitDetail, FileDiff, FileDiffBody, GitError, RefDetail, RefKind, RepositoryReader,
+    diff::{DisplayBudget, is_binary},
+    reader::{resolve_commit, summarize},
+};
+
+/// Bounds that keep huge commits from producing huge pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffLimits {
+    /// Files beyond this count are omitted entirely.
+    pub max_files: usize,
+    /// Either side of a file larger than this is not diffed.
+    pub max_file_bytes: u64,
+    /// Once this many diff lines have been produced, remaining files are summarised only.
+    pub max_total_lines: usize,
+    /// Line text shown, in bytes: a file whose hunks would exceed what remains is summarised.
+    pub max_total_bytes: usize,
+}
+
+impl Default for DiffLimits {
+    fn default() -> Self {
+        Self { max_files: 300, max_file_bytes: 512 * 1024, max_total_lines: 20_000, max_total_bytes: 2 * 1024 * 1024 }
+    }
+}
+
+/// One side of a change: the blob id and its mode.
+type Side = Option<(EntryMode, ObjectId)>;
+
+impl RepositoryReader {
+    /// Page recent refs before allocating commit messages and display metadata. Ref
+    /// timestamps are still scanned to preserve the existing most-recent-first order.
+    pub async fn ref_details_page(
+        &self,
+        kind: RefKind,
+        query: String,
+        default_branch: String,
+        page: usize,
+        limit: usize,
+    ) -> Result<(Vec<RefDetail>, usize), GitError> {
+        self.with_repo(move |repo| {
+            let platform = repo.references().map_err(GitError::backend)?;
+            let iter = match kind {
+                RefKind::Branch => platform.local_branches(),
+                RefKind::Tag => platform.tags(),
+            }
+            .map_err(GitError::backend)?;
+            let needle = query.to_lowercase();
+            let mut refs = Vec::new();
+            for mut reference in iter.flatten() {
+                let name = reference.name().shorten().to_str_lossy().into_owned();
+                if !needle.is_empty() && !name.to_lowercase().contains(&needle) {
+                    continue;
+                }
+                let Ok(commit) = reference.peel_to_commit() else { continue };
+                let date = commit.author().map_err(GitError::backend)?.seconds();
+                refs.push((name, commit.id, date));
+            }
+            refs.sort_by(|a, b| {
+                let default = |name: &str| kind == RefKind::Branch && name == default_branch;
+                default(&b.0).cmp(&default(&a.0)).then_with(|| b.2.cmp(&a.2)).then_with(|| a.0.cmp(&b.0))
+            });
+            let total = refs.len();
+            let limit = limit.clamp(1, 100);
+            let page = page.clamp(1, total.div_ceil(limit).max(1));
+            let rows = refs
+                .into_iter()
+                .skip((page - 1) * limit)
+                .take(limit)
+                .map(|(name, id, _)| {
+                    let commit = repo.find_commit(id).map_err(GitError::backend)?;
+                    Ok(RefDetail { name, kind, commit: summarize(&commit)? })
+                })
+                .collect::<Result<Vec<_>, GitError>>()?;
+            Ok((rows, total))
+        })
+        .await
+    }
+
+    /// Everything `revision` changed relative to its first parent (or the empty tree for
+    /// a root commit), with renames detected.
+    pub async fn commit_detail(&self, revision: String, limits: DiffLimits) -> Result<CommitDetail, GitError> {
+        self.with_repo(move |repo| {
+            let commit = repo.find_commit(resolve_commit(repo, &revision)?).map_err(GitError::backend)?;
+            let new_tree = commit.tree().map_err(GitError::backend)?;
+            let old_tree = match commit.parent_ids().next() {
+                Some(parent) => Some(repo.find_commit(parent).map_err(GitError::backend)?.tree().map_err(GitError::backend)?),
+                None => None,
+            };
+
+            let (files, truncated) = diff_trees(repo, old_tree.as_ref(), &new_tree, limits)?;
+            let committer_name = commit.committer().map_err(GitError::backend)?.trim().name.to_str_lossy().into_owned();
+            Ok(CommitDetail { commit: summarize(&commit)?, committer_name, files, truncated })
+        })
+        .await
+    }
+
+    /// Paths changed since the merge base, without reading blobs or doing rename
+    /// similarity work. Renames appear as deletion plus addition, covering both paths.
+    /// The flag is true if the bounded listing cannot represent every path exactly.
+    pub async fn changed_paths(&self, base: String, head: String, limit: usize) -> Result<(Vec<String>, bool), GitError> {
+        self.with_repo(move |repo| {
+            let base = resolve_commit(repo, &base)?;
+            let head = resolve_commit(repo, &head)?;
+            let Some(common) = repo.merge_base(base, head).map_err(GitError::backend)? else { return Ok((Vec::new(), true)) };
+            let old = repo.find_commit(common).map_err(GitError::backend)?.tree().map_err(GitError::backend)?;
+            let new = repo.find_commit(head).map_err(GitError::backend)?.tree().map_err(GitError::backend)?;
+            let (changes, mut incomplete) = bounded_changes_with_rewrites(repo, Some(&old), &new, limit, false)?;
+            let paths = changes
+                .into_iter()
+                .filter_map(|change| {
+                    if let Ok(path) = change.location().to_str() {
+                        Some(path.to_owned())
+                    } else {
+                        incomplete = true;
+                        None
+                    }
+                })
+                .collect();
+            Ok((paths, incomplete))
+        })
+        .await
+    }
+
+    /// Branches or tags with the commit each points at, most recently committed first.
+    pub async fn ref_details(&self, kind: RefKind) -> Result<Vec<RefDetail>, GitError> {
+        self.with_repo(move |repo| {
+            let platform = repo.references().map_err(GitError::backend)?;
+            let iter = match kind {
+                RefKind::Branch => platform.local_branches(),
+                RefKind::Tag => platform.tags(),
+            }
+            .map_err(GitError::backend)?;
+
+            let mut details = Vec::new();
+            for mut reference in iter.flatten() {
+                let name = reference.name().shorten().to_str_lossy().into_owned();
+                // Tags may point at non-commit objects; those are simply not listed.
+                let Ok(commit) = reference.peel_to_commit() else { continue };
+                details.push(RefDetail { name, kind, commit: summarize(&commit)? });
+            }
+            details.sort_by(|a, b| b.commit.authored_at.cmp(&a.commit.authored_at).then_with(|| a.name.cmp(&b.name)));
+            Ok(details)
+        })
+        .await
+    }
+}
+
+/// Every file that differs between `old_tree` (the empty tree when `None`) and
+/// `new_tree`, with renames detected, bounded by `limits`. The flag is true when files
+/// were omitted or not diffed.
+pub(crate) fn diff_trees(
+    repo: &gix::Repository,
+    old_tree: Option<&gix::Tree<'_>>,
+    new_tree: &gix::Tree<'_>,
+    limits: DiffLimits,
+) -> Result<(Vec<FileDiff>, bool), GitError> {
+    let (changes, omitted) = bounded_changes(repo, old_tree, new_tree, limits.max_files)?;
+
+    let mut files = Vec::new();
+    let mut budget = DisplayBudget { lines: limits.max_total_lines, bytes: limits.max_total_bytes };
+    for change in changes {
+        let Some((path, old_path, status, old, new)) = describe(change) else { continue };
+        files.push(file_diff(repo, path, old_path, status, old, new, &limits, &mut budget)?);
+    }
+
+    // Files skipped once the line budget ran out make the listing incomplete too.
+    let truncated = omitted || files.iter().any(|f| !f.stats_known || matches!(f.body, FileDiffBody::TooLarge));
+    Ok((files, truncated))
+}
+
+/// Retain only the visible prefix of classified changes, stopping at the first omitted
+/// file. Keep gitoxide's rewrite settings and emission order: rename detection can still
+/// require discovering all candidates, but modifications can fill the page before that
+/// work is needed. Directory changes do not consume the file budget.
+fn bounded_changes(
+    repo: &gix::Repository,
+    old_tree: Option<&gix::Tree<'_>>,
+    new_tree: &gix::Tree<'_>,
+    max_files: usize,
+) -> Result<(Vec<gix::object::tree::diff::ChangeDetached>, bool), GitError> {
+    bounded_changes_with_rewrites(repo, old_tree, new_tree, max_files, true)
+}
+
+fn bounded_changes_with_rewrites(
+    repo: &gix::Repository,
+    old_tree: Option<&gix::Tree<'_>>,
+    new_tree: &gix::Tree<'_>,
+    max_files: usize,
+    detect_rewrites: bool,
+) -> Result<(Vec<gix::object::tree::diff::ChangeDetached>, bool), GitError> {
+    let mut cache = repo
+        .diff_resource_cache(gix::diff::blob::pipeline::Mode::ToGit, gix::diff::blob::pipeline::WorktreeRoots::default())
+        .map_err(GitError::backend)?;
+    // With no output requested, only the existence of a changed file matters; its
+    // rename classification and ordering cannot affect the empty result.
+    let rewrites = (max_files != 0 && detect_rewrites).then(gix::diff::Rewrites::default);
+    let options = gix::diff::Options::default().with_rewrites(rewrites);
+    let empty_tree = repo.empty_tree();
+    let old_tree = old_tree.unwrap_or(&empty_tree);
+    let mut changes = Vec::new();
+    let mut omitted = false;
+    let result = gix::diff::tree_with_rewrites(
+        gix::objs::TreeRefIter::from_bytes(&old_tree.data, old_tree.id.kind()),
+        gix::objs::TreeRefIter::from_bytes(&new_tree.data, new_tree.id.kind()),
+        &mut cache,
+        &mut gix::diff::tree::State::default(),
+        &repo.objects,
+        |change| {
+            // Rewrite tracking can invoke the callback again in a later phase after
+            // Break. Never retain or inspect further changes once the limit is known.
+            if omitted {
+                return Ok(ControlFlow::Break(()));
+            }
+            let current_tree = change.entry_mode().is_tree();
+            let previous_tree = change.source_entry_mode_and_id().0.is_tree();
+            if (detect_rewrites && (current_tree || previous_tree)) || (current_tree && previous_tree) {
+                return Ok(ControlFlow::Continue(()));
+            }
+            if changes.len() == max_files {
+                omitted = true;
+                return Ok(ControlFlow::Break(()));
+            }
+            changes.push(change.into_owned());
+            Ok(ControlFlow::Continue(()))
+        },
+        options.into(),
+    );
+    match result {
+        Ok(_) => {}
+        Err(gix::diff::tree::Error::Cancelled) if omitted => {}
+        Err(error) => return Err(GitError::backend(error)),
+    }
+    Ok((changes, omitted))
+}
+
+/// Normalises gitoxide's change into (path, old path, status, old side, new side).
+/// Directory entries are skipped: their contents appear as individual file changes.
+fn describe(change: gix::object::tree::diff::ChangeDetached) -> Option<(String, Option<String>, ChangeStatus, Side, Side)> {
+    use gix::object::tree::diff::ChangeDetached as Change;
+
+    let text = |path: &gix::bstr::BStr| path.to_str_lossy().into_owned();
+    let (path, old_path, status, old, new) = match change {
+        Change::Addition { location, entry_mode, id, .. } => {
+            (text(location.as_ref()), None, ChangeStatus::Added, None, Some((entry_mode, id)))
+        }
+        Change::Deletion { location, entry_mode, id, .. } => {
+            (text(location.as_ref()), None, ChangeStatus::Deleted, Some((entry_mode, id)), None)
+        }
+        Change::Modification { location, previous_entry_mode, previous_id, entry_mode, id } => {
+            (text(location.as_ref()), None, ChangeStatus::Modified, Some((previous_entry_mode, previous_id)), Some((entry_mode, id)))
+        }
+        Change::Rewrite { source_location, source_entry_mode, source_id, entry_mode, id, location, copy, .. } => (
+            text(location.as_ref()),
+            Some(text(source_location.as_ref())),
+            if copy { ChangeStatus::Copied } else { ChangeStatus::Renamed },
+            Some((source_entry_mode, source_id)),
+            Some((entry_mode, id)),
+        ),
+    };
+    let is_tree = |side: &Side| side.is_some_and(|(mode, _)| mode.is_tree());
+    if is_tree(&old) || is_tree(&new) {
+        return None;
+    }
+    Some((path, old_path, status, old, new))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn file_diff(
+    repo: &gix::Repository,
+    path: String,
+    old_path: Option<String>,
+    status: ChangeStatus,
+    old: Side,
+    new: Side,
+    limits: &DiffLimits,
+    budget: &mut DisplayBudget,
+) -> Result<FileDiff, GitError> {
+    // `stats_known = false`: the file was not diffed, so its line counts are unknown.
+    let summary = |body, stats_known| FileDiff {
+        path: path.clone(),
+        old_path: old_path.clone(),
+        status,
+        additions: 0,
+        deletions: 0,
+        stats_known,
+        body,
+    };
+
+    let is_submodule = |side: &Side| side.is_some_and(|(mode, _)| mode.is_commit());
+    if is_submodule(&old) || is_submodule(&new) {
+        let id = |side: Side| side.map(|(_, id)| id.to_hex().to_string());
+        return Ok(summary(FileDiffBody::Submodule { old: id(old), new: id(new) }, true));
+    }
+    if budget.lines == 0 {
+        return Ok(summary(FileDiffBody::TooLarge, false));
+    }
+
+    let (Some(old_data), Some(new_data)) = (read_side(repo, old, limits)?, read_side(repo, new, limits)?) else {
+        return Ok(summary(FileDiffBody::TooLarge, false));
+    };
+    if is_binary(&old_data) || is_binary(&new_data) {
+        return Ok(summary(FileDiffBody::Binary, true));
+    }
+
+    // Without room, keep exact counts but no display lines; once lines run out, nothing
+    // after this file is diffed either.
+    let (changes, over_budget) = budget.diff(&old_data, &new_data);
+    if !over_budget && changes.hunks.is_empty() {
+        return Ok(summary(FileDiffBody::ModeOnly, true));
+    }
+
+    let mut file = FileDiff {
+        path,
+        old_path,
+        status,
+        additions: changes.additions,
+        deletions: changes.deletions,
+        stats_known: true,
+        body: FileDiffBody::TooLarge,
+    };
+    if !over_budget {
+        file.body = FileDiffBody::Text(changes.hunks);
+    }
+    Ok(file)
+}
+
+/// Reads one side of a change: empty for a missing side, `None` when over the size limit.
+fn read_side(repo: &gix::Repository, side: Side, limits: &DiffLimits) -> Result<Option<Vec<u8>>, GitError> {
+    let Some((_, id)) = side else {
+        return Ok(Some(Vec::new()));
+    };
+    if repo.find_header(id).map_err(GitError::backend)?.size() > limits.max_file_bytes {
+        return Ok(None);
+    }
+    Ok(Some(repo.find_blob(id).map_err(GitError::backend)?.take_data()))
+}
+
+#[cfg(test)]
+mod tests;

@@ -1,0 +1,12 @@
+{% extends "settings/layout.html" %}
+{% import "macros.html" as ui %}
+{% block settings_content %}
+<h2 class="text-xl font-semibold">{% call ui::localized(AgentsMessage::Title.text(page.locale)) %}{% endcall %}</h2>
+<p class="hint mt-2">{% call ui::localized(AgentsMessage::Intro.text(page.locale)) %}{% endcall %}</p>
+<a class="btn btn-primary mt-4" href="/settings/agents/new">{% call ui::localized(AgentsMessage::New.text(page.locale)) %}{% endcall %}</a>
+<div class="mt-6 space-y-4">{% for agent in agents %}<section class="box min-w-0 p-4">
+<h3 class="break-words font-medium">{{ agent.name }}</h3><p class="hint break-words font-mono" dir="ltr">{{ agent.handle }}</p>
+<p class="mt-2"><span class="badge">{% if agent.enabled %}{% call ui::localized(AgentsMessage::Enabled.text(page.locale)) %}{% endcall %}{% else %}{% call ui::localized(AgentsMessage::Disabled.text(page.locale)) %}{% endcall %}{% endif %}</span></p>
+<ul class="mt-3 flex flex-wrap gap-2">{% for capability in agent.capabilities %}<li class="badge whitespace-normal">{% call ui::localized(capability.text(page.locale)) %}{% endcall %}</li>{% endfor %}</ul>
+<a class="btn mt-4" href="{{ agent.url }}">{% call ui::localized(AgentsMessage::Edit.text(page.locale)) %}{% endcall %}</a></section>{% endfor %}{% if agents.is_empty() %}<p class="hint">{% call ui::localized(AgentsMessage::Empty.text(page.locale)) %}{% endcall %}</p>{% endif %}</div>
+{% endblock %}

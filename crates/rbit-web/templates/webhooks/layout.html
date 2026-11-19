@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{#- Webhook pages inside a repository's or an organisation's chrome; expects `frame: HookFrame`. Pages fill `hooks_content`. -#}
+{% block nav_context %}
+{%- if let Some(header) = frame.repo %}{% include "repo/nav_context.html" %}
+{%- else if let Some(header) = frame.org %}{% include "org/nav_context.html" %}
+{%- endif %}
+{% endblock %}
+{% block subnav %}{% if let Some(header) = frame.repo %}{% include "repo/subnav.html" %}{% endif %}{% endblock %}
+{% block content %}
+{% if let Some(header) = frame.org %}{% include "org/header.html" %}{% endif %}
+<div class="{% if frame.repo.is_some() %}grid gap-6 md:grid-cols-[13rem_minmax(0,1fr)] md:gap-8{% endif %}">
+{% if let Some(header) = frame.repo %}<aside class="min-w-0 md:sticky md:top-6 md:self-start">{% include "repo/settings_nav.html" %}</aside>{% endif %}
+<div class="min-w-0 {% if frame.org.is_some() %}mt-6 max-w-3xl{% else %}max-w-4xl{% endif %}">
+  <p class="text-[13px]"><a class="text-ink-muted hover:text-ink" href="{{ frame.settings_url }}">{% call ui::localized(WebhookMessage::Settings.text(page.locale)) %}{% endcall %}</a> <span class="text-ink-faint">/</span> <a class="text-ink-muted hover:text-ink" href="{{ frame.hooks_url }}">{% call ui::localized(WebhookMessage::Webhooks.text(page.locale)) %}{% endcall %}</a></p>
+  {% block hooks_content %}{% endblock %}
+</div>
+</div>
+{% endblock %}

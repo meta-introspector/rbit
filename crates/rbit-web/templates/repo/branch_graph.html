@@ -1,0 +1,48 @@
+{% if graph.rows.is_empty() %}
+{% call ui::empty_state("branch", rbit_localization::RepoHistoryLabel::NoBranchesYet.text(page.locale), rbit_localization::RepoHistoryLabel::NoBranchesText.text(page.locale)) %}{% endcall %}
+{% else %}
+<div class="commit-graph" data-commit-graph data-graph-snapshot="{{ graph.snapshot }}" data-graph-width="{{ graph.width }}" aria-label="{{ rbit_localization::RepoHistoryLabel::BranchCommitGraph.text(page.locale) }}">
+  <div class="commit-graph-help">
+    <span data-graph-status aria-live="polite">{% call ui::localized(rbit_localization::RepoHistoryLabel::GraphHelp.text(page.locale)) %}{% endcall %}</span>
+    <button type="button" class="link" data-graph-clear hidden>{% call ui::localized(rbit_localization::RepoHistoryLabel::ClearHighlight.text(page.locale)) %}{% endcall %}</button>
+  </div>
+  <table class="commit-graph-table">
+    <colgroup><col class="commit-graph-column{% if graph.width <= 112 %} commit-graph-column-compact{% endif %}"><col></colgroup>
+    <thead class="sr-only"><tr><th>{% call ui::localized(rbit_localization::RepoHistoryLabel::HistoryConnections.text(page.locale)) %}{% endcall %}</th><th>{% call ui::localized(rbit_localization::RepoHistoryLabel::CommitDetails.text(page.locale)) %}{% endcall %}</th></tr></thead>
+    <tbody>
+    {% for row in graph.rows %}
+    <tr data-graph-row="{{ row.lane }}">
+      <td class="commit-graph-lanes">
+        <svg width="{{ graph.width }}" height="72" viewBox="0 0 {{ graph.width }} 72" preserveAspectRatio="none" aria-hidden="true">
+          {% for edge in row.edges %}<path d="{{ edge.path }}" class="commit-graph-hit" data-graph-hit="{{ edge.lane }}" fill="none" stroke="transparent" stroke-width="12" vector-effect="non-scaling-stroke"/>{% endfor %}
+          {% for edge in row.edges %}<path d="{{ edge.path }}" class="graph-color-{{ edge.color }}" data-graph-lane="{{ edge.lane }}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke"/>{% endfor %}
+          <path d="M{{ row.x }} 36h0.01" class="graph-color-{{ row.color }}" data-graph-lane="{{ row.lane }}" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" vector-effect="non-scaling-stroke" data-graph-node/>
+        </svg>
+      </td>
+      <td class="commit-graph-details">
+        <div class="commit-graph-labels">
+          <button type="button" class="commit-graph-track graph-color-{{ row.color }}" data-graph-track="{{ row.lane }}" aria-pressed="false" aria-label="{{ rbit_localization::RepoHistoryMessage::HighlightTrack { track: row.lane + 1 }.text(page.locale) }}">{% call ui::localized(rbit_localization::RepoHistoryMessage::Track { track: row.lane + 1 }.text(page.locale)) %}{% endcall %}</button>
+          {% for branch in row.branches %}<a href="{{ branch.1 }}" class="badge commit-graph-branch graph-color-{{ row.color }}" title="{{ rbit_localization::RepoHistoryMessage::BranchName { name: branch.0 }.text(page.locale) }}">{% call ui::icon("branch", "size-3 shrink-0") %}{% endcall %}<span>{{ branch.0 }}</span></a>{% endfor %}
+          {% if row.more_branches > 0 %}<a href="{{ header.branches_url }}" class="badge">{% call ui::localized(rbit_localization::RepoHistoryMessage::MoreBranches { count: *row.more_branches }.text(page.locale)) %}{% endcall %}</a>{% endif %}
+          {% if row.is_merge %}<span class="commit-graph-merge">{% call ui::localized(rbit_localization::RepoHistoryLabel::Merge.text(page.locale)) %}{% endcall %}</span>{% endif %}
+        </div>
+        <a href="{{ row.commit.url }}" class="commit-graph-summary hover:underline">{{ row.commit.summary }}</a>
+        <div class="commit-graph-meta">
+          <span>{{ row.commit.author }}</span>
+          <time datetime="{{ row.commit.when_iso }}">{% call ui::localized(row.commit.when.relative(page.locale)) %}{% endcall %}</time>
+          <a href="{{ row.commit.url }}" class="link font-mono" dir="ltr">{{ row.commit.short_id }}</a>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if let Some(url) = graph.next_url %}
+  <div class="flex flex-wrap items-center justify-center gap-3 border-t border-line p-4" data-graph-pagination>
+    <p class="text-xs text-ink-muted" role="status" data-graph-error hidden>{% call ui::localized(rbit_localization::RepoHistoryLabel::GraphLoadFailed.text(page.locale)) %}{% endcall %}</p>
+    <a class="btn" href="{{ url }}" data-graph-more hx-boost="false">{% call ui::localized(rbit_localization::ThreadMessage::LoadMore.localized(page.locale)) %}{% endcall %}</a>
+    <a class="btn" href="{{ graph.start_url }}" data-graph-reload hidden>{% call ui::localized(rbit_localization::RepoHistoryLabel::GraphReload.text(page.locale)) %}{% endcall %}</a>
+  </div>
+  {% endif %}
+</div>
+{% endif %}

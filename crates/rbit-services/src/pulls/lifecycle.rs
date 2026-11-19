@@ -1,0 +1,71 @@
+//! Pull request state rules the shared timeline defers to.
+//!
+//! Milestone 2 workstream P (pull requests) owns this file.
+
+use rbit_collaboration::pulls::{PRIVATE_HEAD_REFUSAL, exposes_private_head};
+use rbit_core::{Issue, IssueId};
+
+use crate::{ServiceContext, ServiceError};
+
+/// Called by `TimelineService::set_state` before reopening a pull request. Refuses
+/// (`ServiceError::Invalid`) when it was merged, its head branch no longer exists, or
+/// another open pull request has the same base and head.
+pub async fn check_reopen(ctx: &ServiceContext, pull: &Issue) -> Result<(), ServiceError> {
+    check_reopen_with(&ctx.database, &ctx.repositories, pull).await
+}
+
+pub(crate) async fn check_reopen_with(
+    database: &rbit_storage::Database,
+    repositories: &rbit_git::RepositoryStorage,
+    pull: &Issue,
+) -> Result<(), ServiceError> {
+    let store = database.pulls();
+    let Some(row) = store.find(pull.id).await? else { return Ok(()) };
+    if row.is_merged() {
+        return Err(ServiceError::Invalid("a merged pull request cannot be reopened".to_owned()));
+    }
+    let head_exists = match row.head_repo_id {
+        Some(id) => match database.admin().find_repository(id).await? {
+            Some(head) => {
+                let reader = repositories.reader(head.repo.owner_id, head.repo.id);
+                reader.commit_id(format!("refs/heads/{}", row.head_branch)).await.is_ok()
+            }
+            None => false,
+        },
+        None => false,
+    };
+    if !head_exists {
+        return Err(ServiceError::Invalid("the head branch no longer exists; push it again to reopen".to_owned()));
+    }
+    // A fork made private after the pull request was opened cannot feed a public base again.
+    let base = database.admin().find_repository(row.repo_id).await?;
+    let head = match row.head_repo_id {
+        Some(id) => database.admin().find_repository(id).await?,
+        None => None,
+    };
+    if let (Some(base), Some(head)) = (base, head)
+        && exposes_private_head(base.repo.visibility.is_public(), head.repo.visibility.is_public())
+    {
+        return Err(ServiceError::Invalid(PRIVATE_HEAD_REFUSAL.to_owned()));
+    }
+    if let Some(number) = store.open_duplicate(&row).await? {
+        return Err(ServiceError::Invalid(format!("pull request #{} already proposes these branches", number.get())));
+    }
+    Ok(())
+}
+
+/// Whether pull request `pull` was merged into its repository's **default** branch (the
+/// issue workstream closes the issues a pull request names only then, as GitHub does).
+/// `false` for anything else, including rows that no longer exist.
+pub async fn merged_into_default_branch(ctx: &ServiceContext, pull: IssueId) -> Result<bool, ServiceError> {
+    merged_into_default_branch_with(&ctx.database, pull).await
+}
+
+pub(crate) async fn merged_into_default_branch_with(database: &rbit_storage::Database, pull: IssueId) -> Result<bool, ServiceError> {
+    let Some(row) = database.pulls().find(pull).await? else { return Ok(false) };
+    if !row.is_merged() {
+        return Ok(false);
+    }
+    let Some(repo) = database.admin().find_repository(row.repo_id).await? else { return Ok(false) };
+    Ok(repo.repo.default_branch == row.base_branch)
+}

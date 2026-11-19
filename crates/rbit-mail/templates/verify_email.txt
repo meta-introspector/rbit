@@ -1,0 +1,9 @@
+Hi {{ m.username }},
+
+{{ m.introduction() }}
+
+{{ m.link }}
+
+The link expires in {{ m.valid_for }}. If you didn't create an account or change your address, you can ignore this email.
+
+{% include "footer.txt" %}

@@ -1,0 +1,83 @@
+[package]
+name = "rbit-web"
+description = "The rbit web application: Axum routes, Askama templates, HTMX, and embedded assets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# One integration-test binary (tests/main.rs) instead of one per file.
+autotests = false
+
+[features]
+# Measurement candidate only; inherited rendering remains the production default.
+shared-shell-experiment = []
+
+[dependencies]
+rbit-identity-models.workspace = true
+zeroize.workspace = true
+rbit-core.workspace = true
+rbit-localization.workspace = true
+# Safe Markdown rendering, partial navigation, themes and the installable app.
+rbit-presentation.workspace = true
+rbit-auth.workspace = true
+rbit-git.workspace = true
+rbit-services.workspace = true
+rbit-transport.workspace = true
+# Repository wikis: validated page names and IDs parsed from URLs and forms.
+rbit-wikis = { workspace = true, default-features = false }
+
+axum = { workspace = true, features = ["multipart"] }
+axum-extra.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+futures-util.workspace = true
+async-compression.workspace = true
+brotli.workspace = true
+
+askama.workspace = true
+askama_web.workspace = true
+syntect.workspace = true
+rust-embed.workspace = true
+mime_guess.workspace = true
+percent-encoding.workspace = true
+qrcode.workspace = true
+
+base64.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+# Actions: S. The runner protocol's wire types, and gzip bodies within a decompressed cap.
+rbit-workflow.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+p256.workspace = true
+rbit-identity = { workspace = true, features = ["password-work"] }
+rbit-kernel.workspace = true
+proptest.workspace = true
+# Actions (F): the query counter shared with rbit-storage's tests.
+tracing-subscriber.workspace = true
+rbit-storage.workspace = true
+tempfile.workspace = true
+# Actions: artifacts as the runner stores them, and the zip archives they download as.
+tar.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+
+# The HTTP eval of Actions' authorization and protocol rules (see tests/actions_eval.rs).
+[[test]]
+name = "actions_eval"
+path = "tests/actions_eval.rs"

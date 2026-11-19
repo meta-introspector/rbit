@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "org/nav_context.html" %}{% endblock %}
+{% block content %}{% include "org/header.html" %}
+<section class="box mt-6 max-w-xl p-4">
+<h2 class="text-xl font-semibold">{% call ui::localized(OrgMessage::ProjectEditPlanning.text(page.locale)) %}{% endcall %}</h2>
+<a class="mt-2 block break-words" href="{{ card.url }}">{{ card.title }}</a>
+<p class="hint break-words">{{ card.label }}</p>
+<p class="hint mt-3">{% call ui::localized(OrgMessage::ProjectPlanningHint.text(page.locale)) %}{% endcall %}</p>
+<form method="post" action="{{ card.action }}/planning" class="mt-4 grid gap-4">
+<input type="hidden" name="revision" value="{{ card.revision }}">
+<div class="min-w-0">
+<label class="label" for="priority">{% call ui::localized(OrgMessage::ProjectPriority.text(page.locale)) %}{% endcall %}</label>
+<select id="priority" class="input" name="priority">{% for option in priorities %}<option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>{% call ui::localized(option.label.text(page.locale)) %}{% endcall %}</option>{% endfor %}</select>
+</div>
+<div class="min-w-0">
+<label class="label" for="iteration">{% call ui::localized(OrgMessage::ProjectIteration.text(page.locale)) %}{% endcall %}</label>
+<select id="iteration" class="input" name="iteration_id">
+<option value="">{% call ui::localized(OrgMessage::ProjectUnassigned.text(page.locale)) %}{% endcall %}</option>{% for option in iterations %}<option value="{{ option.id }}" {% if iteration_id.unwrap_or(0) == option.id %}selected{% endif %}>{{ option.title }}{% if option.archived %} · {% call ui::localized(OrgMessage::ProjectArchived.text(page.locale)) %}{% endcall %}{% endif %}</option>{% endfor %}</select>
+</div>
+<div class="min-w-0">
+<label class="label" for="target-date">{% call ui::localized(OrgMessage::ProjectTargetDate.text(page.locale)) %}{% endcall %}</label>
+<input id="target-date" class="input min-w-0" type="date" name="target_date" value="{{ card.target_date }}">
+</div>
+<button class="btn btn-primary" type="submit">{% call ui::localized(OrgMessage::ProjectSave.text(page.locale)) %}{% endcall %}</button>
+<a class="btn btn-ghost" href="{{ base }}">{% call ui::localized(OrgMessage::ProjectBackProject.text(page.locale)) %}{% endcall %}</a>
+</form>
+</section>{% endblock %}

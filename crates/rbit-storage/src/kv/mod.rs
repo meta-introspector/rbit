@@ -1,0 +1,51 @@
+//! redb key/value storage for hot, simple, rebuildable data: login sessions and
+//! content-addressed insight caches.
+//!
+//! redb transactions are synchronous, so every public method hops onto Tokio's blocking
+//! pool; callers stay fully async.
+
+mod insights;
+mod recovery;
+pub(crate) mod sessions;
+
+use std::{path::Path, sync::Arc};
+
+pub use self::sessions::{AppliedSessionRevocation, EpochSessionStore, EpochSnapshot, SessionRecord, SessionStore, StoredSession};
+pub use insights::{
+    CachedCommit, CachedComparisonCounts, CachedContributions, CachedLanguage, CachedLanguageStats, CachedLastCommits, InsightsCache,
+};
+pub use recovery::{CredentialRecoveryGate, CredentialRecoveryPermit};
+
+use crate::{StorageError, error::kv_error};
+
+/// Shared handle to the redb database file.
+#[derive(Debug, Clone)]
+pub struct KvStore {
+    db: Arc<redb::Database>,
+    credential_recovery: CredentialRecoveryGate,
+}
+
+impl KvStore {
+    pub fn open(path: &Path) -> Result<Self, StorageError> {
+        let db = redb::Database::create(path).map_err(kv_error)?;
+        sessions::epoch::stopped::legacy_allowed(&db)?;
+        let store = Self { db: Arc::new(db), credential_recovery: CredentialRecoveryGate::default() };
+        store.sessions().ensure_table()?;
+        store.insights().ensure_tables()?;
+        Ok(store)
+    }
+
+    /// Shared by clones and independent service compositions on this backend.
+    /// It does not coordinate another process or independently opened database.
+    pub fn credential_recovery_gate(&self) -> CredentialRecoveryGate {
+        self.credential_recovery.clone()
+    }
+
+    pub fn sessions(&self) -> SessionStore {
+        SessionStore::new(Arc::clone(&self.db))
+    }
+
+    pub fn insights(&self) -> InsightsCache {
+        InsightsCache::new(Arc::clone(&self.db))
+    }
+}

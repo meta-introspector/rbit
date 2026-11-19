@@ -1,0 +1,3112 @@
+{
+  "paths": {
+    "/repos/{owner}/{repo}/pulls": {
+      "get": {
+        "operationId": "listPullRequests",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Pull requests of a repository",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed",
+                "all"
+              ],
+              "default": "open"
+            }
+          },
+          {
+            "name": "head",
+            "in": "query",
+            "description": "`branch` or `owner:branch` of the head.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "base",
+            "in": "query",
+            "description": "The base branch.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated"
+              ],
+              "default": "created"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/per_page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PullRequest"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/Link"
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPullRequest",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Open a pull request",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The new pull request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        },
+        "description": "`head` is `branch`, `owner:branch` or `owner/name:branch` of a repository in the same fork network. Refused (422) when there is nothing to merge or another open pull request proposes the same branches.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPullRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}": {
+      "get": {
+        "operationId": "getPullRequest",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "One pull request",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePullRequest",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Change the title, body, state or base branch",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PullRequestChanges"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/commits": {
+      "get": {
+        "operationId": "listPullRequestCommits",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "The pull request's commits, oldest first",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/per_page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The commits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Commit"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/Link"
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/files": {
+      "get": {
+        "operationId": "listPullRequestFiles",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "The files the pull request changes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/per_page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PullRequestFile"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/Link"
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/merge": {
+      "get": {
+        "operationId": "checkPullRequestMerged",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Whether the pull request was merged",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Merged"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "operationId": "mergePullRequest",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Merge the pull request",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Merged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeResult"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Not mergeable (conflicts, a draft, unmet requirements)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`sha` is not the head",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/reviews": {
+      "get": {
+        "operationId": "listPullRequestReviews",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Submitted reviews (and the caller's pending one)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/per_page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reviews",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PullRequestReview"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/Link"
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPullRequestReview",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Review the pull request",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestReview"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        },
+        "description": "Without `event` the comments go into the caller's pending review. The author may only `COMMENT`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPullRequestReview"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/reviews/{id}": {
+      "get": {
+        "operationId": "getPullRequestReview",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "One review",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The review id.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestReview"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/reviews/{id}/dismissals": {
+      "put": {
+        "operationId": "dismissPullRequestReview",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Dismiss an approval or a change request (writers)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The review id.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The dismissed review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestReview"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "message"
+                ],
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/comments": {
+      "get": {
+        "operationId": "listPullRequestReviewComments",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Review comments on diff lines",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/per_page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The comments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PullRequestReviewComment"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/Link"
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPullRequestReviewComment",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Comment on a diff line, or reply to a comment",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The comment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestReviewComment"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPullRequestReviewComment"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/requested_reviewers": {
+      "get": {
+        "operationId": "listRequestedReviewers",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Users asked to review",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested reviewers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestedReviewers"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "requestReviewers",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Ask users to review (writers and the author)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The pull request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewerNames"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "removeRequestedReviewers",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Withdraw review requests",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewerNames"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/ensure": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        }
+      ],
+      "post": {
+        "operationId": "ensurePull",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: publish or recover one pull request for a pair of branches",
+        "description": "`schema: rbit.pr-ensure/1`. Body: `head` (branch or `owner:branch`), `base`, optional `title`, `body`, `draft` (default `true`) and `request_id`. An open pull request from the same head into the same base is returned (`200`, `outcome: existing`) instead of refused. With `request_id`, the answer is remembered for a week: a retry with the same inputs returns the same pull request (`200`, `outcome: replayed`), even if the first call's response was lost; reusing the id with other inputs is `409 conflict`. A new pull request is `201`, `outcome: created`. Answers `number`, `outcome` and the `pull` as `GET …/pulls/{number}` shows it.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A new pull request (an existing or replayed one answers 200)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/watch": {
+      "parameters": [
+        { "$ref": "#/components/parameters/owner" },
+        { "$ref": "#/components/parameters/repo" },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "description": "The pull request number",
+          "schema": { "type": "integer", "minimum": 1 }
+        }
+      ],
+      "get": {
+        "operationId": "watchPull",
+        "tags": ["pulls"],
+        "summary": "rbit's own: get a pull request snapshot or wait for a change",
+        "description": "Returns the current head and base, checks and mergeability, submitted reviews and review threads, discussion comment count, and merge queue state. A cursor from a previous response waits for a changed snapshot, even when checks are already green. With no cursor the snapshot is immediate. With an unchanged cursor after the wait, changed is false. This is a bounded wait on the current snapshot.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response for this pull request",
+            "schema": { "type": "string", "pattern": "^[a-fA-F0-9]{16}$" }
+          },
+          {
+            "name": "timeout",
+            "in": "query",
+            "description": "Seconds to wait with a cursor, capped at 25. Zero returns immediately.",
+            "schema": { "type": "integer", "minimum": 0, "default": 25 }
+          }
+        ],
+        "security": [{}, { "token": [] }],
+        "responses": {
+          "200": {
+            "description": "The observed pull request snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["schema", "number", "cursor", "changed", "state", "head", "head_branch", "base", "base_sha", "readiness", "readiness_checks_protection", "can_request_merge", "reviews", "review_count", "threads", "thread_count", "queue", "merge_commit", "mergeability", "conflict_paths", "discussion_count", "requested_reviewers"],
+                  "properties": {
+                    "schema": { "const": "rbit.pr-watch/1" },
+                    "number": { "type": "integer" },
+                    "cursor": { "type": "string" },
+                    "changed": { "type": "boolean" },
+                    "state": { "enum": ["open", "closed", "merged"] },
+                    "head": { "type": "string" },
+                    "head_branch": { "type": "string" },
+                    "base": { "type": "string" },
+                    "base_sha": { "type": ["string", "null"] },
+                    "readiness": { "type": "object", "description": "The same caller-relative readiness evaluation as GET …/readiness." },
+                    "readiness_checks_protection": { "type": "boolean", "description": "Whether the caller's access allows the readiness result to include branch protection." },
+                    "can_request_merge": { "type": "boolean", "description": "Whether the caller has base repository write access and its token allows requesting a merge. Readiness is evaluated separately." },
+                    "reviews": { "type": "array", "maxItems": 50, "items": { "type": "object" }, "description": "The most recent submitted review summaries, ordered oldest first. Each has id, author, state, commit and says." },
+                    "review_count": { "type": "integer", "description": "Count of all submitted reviews." },
+                    "threads": { "type": "array", "maxItems": 50, "items": { "type": "object" }, "description": "The same unresolved threads as GET …/inbox, oldest first." },
+                    "thread_count": { "type": "integer", "description": "Count of all unresolved submitted review threads." },
+                    "queue": { "type": ["object", "null"], "description": "The newest merge queue entry as in GET …/queue, when present." },
+                    "merge_commit": { "type": ["string", "null"] },
+                    "mergeability": { "enum": ["unknown", "clean", "conflict", "error"] },
+                    "conflict_paths": { "type": "array", "items": { "type": "string" } },
+                    "discussion_count": { "type": "integer", "description": "Count of comments on the PR discussion." },
+                    "requested_reviewers": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "422": { "$ref": "#/components/responses/ValidationFailed" }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/readiness": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "description": "The pull request number",
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPullReadiness",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: whether the head can merge, by the merge's own rules",
+        "description": "`schema: rbit.readiness/1`: the evaluation the merge itself runs (and the merge box shows), for the current head: `ready`, `blocked` (a protection rule is unmet), `may_bypass`, each requirement (`name`, `met`, `says`, `protection`), and each status context: the required ones as `expected` (nothing reported yet), `running`, `failed` or `passed`, and the others with `required: false`. A required check no workflow will report for this head (filtered out, skip marker) is not required. With `head`, a different current head is `409 head_changed`.",
+        "parameters": [
+          {
+            "name": "head",
+            "in": "query",
+            "description": "The head the caller expects (a full id or a prefix).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/ready": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "description": "The pull request number",
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "markPullReady",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: mark a draft ready for review, for an exact head",
+        "description": "Body: `head`, the head the caller expects. A draft is marked ready for review (as the web page's button does); a pull request already ready is left alone. A different current head is `409 head_changed`. Answers the readiness, as `GET …/readiness` does. Needs a `write` token, and the author or a writer.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The readiness after marking it ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/agent/compare": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        }
+      ],
+      "get": {
+        "operationId": "getAgentCompare",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: merge base, ahead and behind, without a diff",
+        "description": "`schema: rbit.compare/1`: the full ids of `base` and `head`, their best common ancestor (`null` for unrelated histories), and the commits each has that the other has not (`ahead`, `behind`, counted up to 10,000).",
+        "parameters": [
+          {
+            "name": "base",
+            "in": "query",
+            "required": true,
+            "description": "A branch, tag or commit.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "head",
+            "in": "query",
+            "required": true,
+            "description": "A branch, tag or commit.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The comparison",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/agent/contains": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        }
+      ],
+      "get": {
+        "operationId": "getAgentContains",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: whether a branch contains a commit",
+        "description": "`schema: rbit.contains/1`: whether `ref` (the default branch when not given) is `commit` or has it as an ancestor, with the commit's full id.",
+        "parameters": [
+          {
+            "name": "commit",
+            "in": "query",
+            "required": true,
+            "description": "A commit (or branch, or tag).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "description": "The branch, tag or commit that may contain it; the default branch when not given.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether it is contained",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/agent/commits/{sha}/pulls": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "sha",
+          "in": "path",
+          "required": true,
+          "description": "A commit id, branch or tag",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAgentCommitPulls",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: the pull requests a commit belongs to",
+        "description": "`schema: rbit.commit-pulls/1`: the pull requests whose head is the commit, that merged as it, or that merged it as their head, open, closed or merged, newest first, at most 50: `number`, `title`, `state` (`open`, `closed`, `merged`), `role` (`head`, `merge_commit`, `merged_head`), `base` and `head_branch`.",
+        "security": [
+          {},
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/queue": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "description": "The pull request number",
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "enqueuePull",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: queue a pull request to land only after its merge passed CI",
+        "description": "Body: `head` (the expected head; a different one is `409 head_changed`), optional `base` (the expected target branch; a different one is `409 base_changed`), and `merge_method` (`merge`, `squash` or `rebase`). Every requirement but the checks must be met now (`405` otherwise, saying which). One pull request per line is tested at a time: its merge on the current base tip is built into `refs/merge-queue/<base>/pr-<n>`, which workflows see as a push to the branch `merge-queue/<base>/pr-<n>`. When every context the base's protection requires has passed on that commit, exactly that commit becomes the base by compare-and-swap; a base that moved meanwhile means a new candidate and a new test, so nothing lands untested. A failed required check, a conflict or a moved head takes it out of line with the reason. `schema: rbit.queue/1`: `state` (`waiting`, `testing`, `landed`, `failed`, `removed`), `position` in line (1 is being tested or next; `null` once out of line), the queued `head`, `base`, `merge_method`, the `candidate` commit and the base tip it was `built_on`, `attempts` and, after leaving the line, the `reason`.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued (or already in line)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getPullQueue",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: a pull request's place in the merge queue",
+        "description": "The newest queue entry of the pull request, in line or not. `schema: rbit.queue/1`: `state` (`waiting`, `testing`, `landed`, `failed`, `removed`), `position` in line (1 is being tested or next; `null` once out of line), the queued `head`, `base`, `merge_method`, the `candidate` commit and the base tip it was `built_on`, `attempts` and, after leaving the line, the `reason`.",
+        "security": [
+          {},
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "dequeuePull",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: take a pull request out of the merge queue",
+        "description": "Takes the pull request out of line and deletes its candidate; `404` when it was not in line. Needs a `write` token.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Taken out of line"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/update-branch": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "description": "The pull request number",
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "updatePullBranch",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: merge the base into a pull request's head branch",
+        "description": "`schema: rbit.update-branch/1`. Body: `expected_head`, the head the caller saw (`409 head_changed` otherwise). Merges the base tip into the head branch with a merge commit by the caller, through branch protection as a push would (`405` with the reason when refused), and reports it as a push. Answers the new `head` and whether it moved (`updated`; an up-to-date head is left alone). Only head branches in the same repository.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The head after the update",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/agent/revert": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        }
+      ],
+      "post": {
+        "operationId": "revertCommit",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: revert a commit into a ready-made pull request",
+        "description": "`schema: rbit.revert/1`. Body: `commit` and `base` (the default branch when not given). Makes branch `revert-<first 12 digits of the commit>` from the base tip with one commit that undoes the commit, and opens a pull request for it into the base; it never merges on its own. `405` with the reason when the revert conflicts, the change is no longer there, or the branch exists.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pull request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/agent/branch-update": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        }
+      ],
+      "post": {
+        "operationId": "updateBranchRef",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: move a branch by compare-and-swap",
+        "description": "`schema: rbit.branch-update/1`. Body: `branch`, `sha` and `expected` (full commit ids). Moves the branch from `expected` to `sha` if a push by the caller would be allowed (`405` with the reason otherwise), atomically: `409 head_changed` when the branch is no longer `expected`. Reported as a push.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The branch moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/manifest": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "description": "The pull request number",
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPullManifest",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: what a pull request changes, without patch text",
+        "description": "`schema: rbit.manifest/1`: the compared `base` and `head`, the change `classes` (`docs_only`, `tests_only`, `workflows`, `dependencies`), and every changed file with `path`, `old_path`, `status`, `additions`, `deletions`, `stats_known`, `binary` and the `old_blob` and `new_blob` ids. With `path`, that file's hunks as unified-diff text instead (`schema: rbit.hunks/1`); with `hunk` too, only that one.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "description": "One changed file: its hunks.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hunk",
+            "in": "query",
+            "description": "With `path`: only this hunk (from 0).",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/inbox": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "description": "The pull request number",
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPullInbox",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: the unresolved review threads, in one short answer",
+        "description": "`schema: rbit.inbox/1`: the unresolved threads of submitted reviews, oldest first, at most 50: the root comment's `id`, `path`, `side`, `line` and `commit`, an excerpt of what it `says` and who wrote it, how many `replies` and the last one. `anchor` is `current` when the file did not change since, `moved` when the commented line, unique in its file then, is found exactly once in the head (`head_line`, in `head_path`, the new name when the pull request renamed the file), and `ambiguous` when it is gone, several lines match or it had identical twins. Reply with `POST …/pulls/{number}/comments` and `in_reply_to`; resolve with `PUT …/comments/{id}/resolution`.",
+        "security": [
+          {},
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The inbox",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/comments/{id}/resolution": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "description": "The pull request number",
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "The thread's root comment id",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "resolvePullThread",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "rbit's own: resolve or reopen a review thread",
+        "description": "`schema: rbit.resolution/1`. Body: `resolved` (`true` or `false`). Resolves the thread the comment roots (as the web page's button does), for the author of the thread or a writer. Needs a `write` token.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The thread's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/review-progress": {
+      "get": {
+        "operationId": "getPullReviewProgress",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Private file review progress",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "200": {
+            "description": "Review workflow result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "head_sha",
+                    "files"
+                  ],
+                  "properties": {
+                    "head_sha": {
+                      "type": "string",
+                      "minLength": 40,
+                      "maxLength": 64
+                    },
+                    "files": {
+                      "type": "array",
+                      "maxItems": 1000,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "fingerprint",
+                          "viewed"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "maxLength": 4096
+                          },
+                          "fingerprint": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "viewed": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "markPullReviewFile",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Mark a file viewed at its exact head and fingerprint",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "204": {
+            "description": "Review workflow result"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "409": {
+            "description": "The reviewed head or selection changed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "expected_head",
+                  "fingerprint",
+                  "viewed"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "expected_head": {
+                    "type": "string",
+                    "minLength": 40,
+                    "maxLength": 64
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "viewed": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/review-changes": {
+      "get": {
+        "operationId": "getChangesSincePullReview",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Exact changes since the caller’s last submitted review; requires current fork read access",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The pull request changed while refreshing current access; reload the comparison."
+          },
+          "200": {
+            "description": "Review workflow result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "first_review",
+                    "head_sha",
+                    "baseline",
+                    "files",
+                    "truncated"
+                  ],
+                  "properties": {
+                    "first_review": {
+                      "type": "boolean"
+                    },
+                    "head_sha": {
+                      "type": "string",
+                      "minLength": 40,
+                      "maxLength": 64
+                    },
+                    "baseline": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The caller’s own last submitted review head; null for a first review."
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "filename",
+                          "additions",
+                          "deletions",
+                          "patch"
+                        ],
+                        "properties": {
+                          "filename": {
+                            "type": "string"
+                          },
+                          "previous_filename": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "additions": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "deletions": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "patch": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/suggestions/apply": {
+      "post": {
+        "operationId": "applyPullReviewSuggestions",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Apply 1–20 selected suggestions in one guarded commit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "200": {
+            "description": "Review workflow result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "commit_sha"
+                  ],
+                  "properties": {
+                    "commit_sha": {
+                      "type": "string",
+                      "minLength": 40,
+                      "maxLength": 64
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "409": {
+            "description": "The reviewed head or selection changed"
+          },
+          "503": {
+            "description": "All bounded suggestion workers are busy or shutting down; retry later."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expected_head",
+                  "suggestions"
+                ],
+                "properties": {
+                  "expected_head": {
+                    "type": "string",
+                    "minLength": 40,
+                    "maxLength": 64
+                  },
+                  "suggestions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "comment_id",
+                        "body_digest"
+                      ],
+                      "properties": {
+                        "comment_id": {
+                          "type": "integer"
+                        },
+                        "body_digest": {
+                          "type": "string",
+                          "minLength": 64,
+                          "maxLength": 64
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/pulls/{number}/conflicts": {
+      "get": {
+        "operationId": "previewPullConflicts",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Preview bounded text conflicts for a source-branch writer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "200": {
+            "description": "Exact conflict preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "head_sha",
+                    "base_sha",
+                    "files"
+                  ],
+                  "properties": {
+                    "head_sha": {
+                      "type": "string",
+                      "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                    },
+                    "base_sha": {
+                      "type": "string",
+                      "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                    },
+                    "files": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "source",
+                          "target",
+                          "merged"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "maxLength": 1024
+                          },
+                          "source": {
+                            "type": "string",
+                            "maxLength": 262144
+                          },
+                          "target": {
+                            "type": "string",
+                            "maxLength": 262144
+                          },
+                          "merged": {
+                            "type": "string",
+                            "maxLength": 262144
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsupported conflicts or invalid resolution input."
+          },
+          "409": {
+            "description": "The pull request or branch snapshot changed. Reload the preview."
+          },
+          "503": {
+            "description": "Conflict processing is at capacity."
+          }
+        },
+        "description": "Requires write token scope, Push right, and current write access to the source repository. Protected source branches are refused without administrator bypass. Text is bounded to 20 files, 256 KiB per file and 1 MiB total."
+      },
+      "post": {
+        "operationId": "resolvePullConflicts",
+        "tags": [
+          "pulls"
+        ],
+        "summary": "Resolve every conflicted file in one source-branch merge commit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/owner"
+          },
+          {
+            "$ref": "#/components/parameters/repo"
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "description": "The pull request number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "200": {
+            "description": "Accepted source-branch merge commit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "commit_sha"
+                  ],
+                  "properties": {
+                    "commit_sha": {
+                      "type": "string",
+                      "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsupported conflicts or invalid resolution input."
+          },
+          "409": {
+            "description": "The pull request or branch snapshot changed. Reload the preview."
+          },
+          "503": {
+            "description": "Conflict processing is at capacity."
+          }
+        },
+        "description": "Requires write token scope, Push right, and current write access to the source repository. Protected source branches are refused without administrator bypass. Text is bounded to 20 files, 256 KiB per file and 1 MiB total.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expected_head",
+                  "expected_base",
+                  "resolutions"
+                ],
+                "properties": {
+                  "expected_head": {
+                    "type": "string",
+                    "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                  },
+                  "expected_base": {
+                    "type": "string",
+                    "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                  },
+                  "resolutions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "content"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "maxLength": 1024
+                        },
+                        "content": {
+                          "type": "string",
+                          "maxLength": 262144
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PullRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "milestone": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Account"
+            }
+          },
+          "requested_reviewers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Account"
+            }
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              },
+              "sha": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "repo": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Repository"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "base": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              },
+              "sha": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "repo": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Repository"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "merged": {
+            "type": "boolean"
+          },
+          "mergeable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "mergeable_state": {
+            "type": "string",
+            "enum": [
+              "clean",
+              "dirty",
+              "blocked",
+              "unknown",
+              "draft"
+            ]
+          },
+          "merged_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "merged_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Account"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "merge_commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "comments": {
+            "type": "integer"
+          },
+          "review_comments": {
+            "type": "integer"
+          },
+          "commits": {
+            "type": "integer"
+          },
+          "additions": {
+            "type": "integer"
+          },
+          "deletions": {
+            "type": "integer"
+          },
+          "changed_files": {
+            "type": "integer"
+          },
+          "html_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "NewPullRequest": {
+        "type": "object",
+        "required": [
+          "head",
+          "base"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Defaults to the single commit's summary or the branch name."
+          },
+          "head": {
+            "type": "string",
+            "description": "`branch`, `owner:branch` or `owner/name:branch`."
+          },
+          "base": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "PullRequestChanges": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          "base": {
+            "type": "string"
+          }
+        }
+      },
+      "PullRequestFile": {
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "previous_filename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "added",
+              "removed",
+              "modified",
+              "renamed",
+              "copied"
+            ]
+          },
+          "additions": {
+            "type": "integer"
+          },
+          "deletions": {
+            "type": "integer"
+          },
+          "changes": {
+            "type": "integer"
+          },
+          "patch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Unified diff hunks; null for binary or very large files."
+          }
+        }
+      },
+      "MergeRequest": {
+        "type": "object",
+        "properties": {
+          "merge_method": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "squash",
+              "rebase"
+            ],
+            "default": "merge"
+          },
+          "commit_title": {
+            "type": "string"
+          },
+          "commit_message": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string",
+            "description": "The head the caller reviewed; a different head is a 409."
+          }
+        }
+      },
+      "MergeResult": {
+        "type": "object",
+        "properties": {
+          "sha": {
+            "type": "string"
+          },
+          "merged": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "PullRequestReview": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "user": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "body": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "COMMENTED",
+              "APPROVED",
+              "CHANGES_REQUESTED",
+              "DISMISSED"
+            ]
+          },
+          "commit_id": {
+            "type": "string"
+          },
+          "submitted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "html_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "pull_request_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "NewPullRequestReview": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string",
+            "enum": [
+              "APPROVE",
+              "REQUEST_CHANGES",
+              "COMMENT"
+            ]
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewPullRequestReviewComment"
+            }
+          }
+        }
+      },
+      "PullRequestReviewComment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "pull_request_review_id": {
+            "type": "integer"
+          },
+          "user": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "body": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "LEFT",
+              "RIGHT"
+            ]
+          },
+          "line": {
+            "type": "integer"
+          },
+          "commit_id": {
+            "type": "string"
+          },
+          "diff_hunk": {
+            "type": "string"
+          },
+          "in_reply_to_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outdated": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "html_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "body_digest": {
+            "type": "string",
+            "description": "SHA-256 hex of the exact body; send with a suggestion selection."
+          }
+        }
+      },
+      "NewPullRequestReviewComment": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "LEFT",
+              "RIGHT"
+            ],
+            "default": "RIGHT"
+          },
+          "in_reply_to": {
+            "type": "integer",
+            "description": "Reply to this comment (path and line are then taken from it)."
+          },
+          "expected_head": {
+            "type": "string",
+            "description": "Full head object id shown while composing. Required for suggestion blocks."
+          }
+        }
+      },
+      "RequestedReviewers": {
+        "type": "object",
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Account"
+            }
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "ReviewerNames": {
+        "type": "object",
+        "required": [
+          "reviewers"
+        ],
+        "properties": {
+          "reviewers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 15
+          }
+        }
+      }
+    }
+  }
+}

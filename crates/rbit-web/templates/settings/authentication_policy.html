@@ -1,0 +1,14 @@
+<form method="post" action="{{ action_url }}" class="box mt-6">
+  <div class="box-header"><h2 class="font-medium">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::TwoFactor.text(page.locale)) %}{% endcall %}</h2></div>
+  <div class="p-4">
+    {% call ui::form_error(error) %}{% endcall %}
+    <label class="label" for="mfa-policy">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::RequireFactor.text(page.locale)) %}{% endcall %}</label>
+    <select class="input" id="mfa-policy" name="required">
+      <option value="optional" {% if !required %}selected{% endif %}>{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::Optional.text(page.locale)) %}{% endcall %}</option>
+      <option value="required" {% if required %}selected{% endif %}>{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::Required.text(page.locale)) %}{% endcall %}</option>
+    </select>
+    <p class="hint">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::EnrollmentHelp.text(page.locale)) %}{% endcall %}</p>
+    <p class="hint">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::OwnerHelp.text(page.locale)) %}{% endcall %}</p>
+  </div>
+  <div class="flex justify-end border-t border-line p-4"><button class="btn btn-primary" type="submit">{% call ui::localized(rbit_localization::settings::authentication_policy::PolicyMessage::Save.text(page.locale)) %}{% endcall %}</button></div>
+</form>

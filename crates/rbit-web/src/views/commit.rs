@@ -1,0 +1,652 @@
+//! The single-commit page: message, metadata and file diffs.
+
+use std::{borrow::Cow, collections::BTreeMap, fmt};
+
+use askama::Template;
+use askama_web::WebTemplate;
+use rbit_git::{
+    ChangeStatus, CommitDetail, FileDiff, FileDiffBody,
+    diff::{DiffLine, Hunk, LineKind},
+};
+
+use rbit_services::statuses::CombinedStatus;
+
+use crate::{
+    urls::RepoUrls,
+    views::{
+        blocks::{self, BLOCKED_ABOVE_ROWS, Block, blocks},
+        layout::Page,
+        repo::{CommitView, RepoHeader},
+        statuses::{CHECKS_ANCHOR, ChecksView, StatusMark},
+    },
+};
+
+#[derive(Debug, Clone)]
+pub struct ParentLink {
+    pub short_id: String,
+    pub url: String,
+}
+
+/// A line number in a diff row, or none: hunk headers, end-of-file notes and the side a
+/// line is not on. Renders as its digits or as nothing, so a row holds no number strings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LineNumber(pub Option<u32>);
+
+impl LineNumber {
+    fn of(number: Option<usize>) -> Self {
+        Self(number.and_then(|number| u32::try_from(number).ok()))
+    }
+}
+
+impl fmt::Display for LineNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(number) => write!(f, "{number}"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// One fixed-height row of a unified diff: a hunk header, a changed or context line, or
+/// Git's "No newline at end of file" note. Every row is exactly one `--row-h` tall, so a
+/// block of rows has an exact height (see [`crate::views::blocks`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffLineView {
+    /// CSS modifier: `hunk`, `add`, `del`, `ctx` or `eof`. The sign (`+`, `-`) is drawn by
+    /// app.css from it, so it is never copied with the code.
+    pub kind: &'static str,
+    /// None for hunk headers and end-of-file notes, and on the side a line is not on.
+    pub old_number: LineNumber,
+    pub new_number: LineNumber,
+    /// The line (anything in it that would break it shown as a symbol, see
+    /// [`crate::render::row_char`]), the hunk header (`@@ -a,b +c,d @@`) or the
+    /// end-of-file note. Moved out of an owned diff ([`Self::owned_line`]), and borrowed
+    /// for the end-of-file note.
+    pub text: Cow<'static, str>,
+}
+
+/// What an end-of-file row says.
+pub const NO_NEWLINE: &str = "No newline at end of file";
+
+impl DiffLineView {
+    /// Whether the row is a line of the file, with line numbers (not a hunk header or an
+    /// end-of-file note).
+    #[must_use]
+    pub fn is_line(&self) -> bool {
+        matches!(self.kind, "add" | "del" | "ctx")
+    }
+
+    /// The hunk header row, taking the header.
+    #[must_use]
+    pub fn hunk(header: String) -> Self {
+        Self { kind: "hunk", old_number: LineNumber(None), new_number: LineNumber(None), text: Cow::Owned(header) }
+    }
+
+    /// The "No newline at end of file" row shown after a line that lacks one.
+    #[must_use]
+    pub fn eof() -> Self {
+        Self { kind: "eof", old_number: LineNumber(None), new_number: LineNumber(None), text: Cow::Borrowed(NO_NEWLINE) }
+    }
+
+    /// The row of one line of a hunk, taking its text: it is copied only when a character
+    /// in it must be shown as a symbol ([`crate::render::row_text`]).
+    #[must_use]
+    pub fn owned_line(line: DiffLine) -> Self {
+        let kind = match line.kind {
+            LineKind::Added => "add",
+            LineKind::Removed => "del",
+            LineKind::Context => "ctx",
+        };
+        let shown = match crate::render::row_text(&line.text) {
+            Cow::Borrowed(_) => None,
+            Cow::Owned(shown) => Some(shown),
+        };
+        Self {
+            kind,
+            old_number: LineNumber::of(line.old_number),
+            new_number: LineNumber::of(line.new_number),
+            text: Cow::Owned(shown.unwrap_or(line.text)),
+        }
+    }
+}
+
+/// Widest line number column a class exists for (`diff-w1` … `diff-w7` in app.css).
+const NUMBER_CLASSES: [&str; 7] = ["diff-w1", "diff-w2", "diff-w3", "diff-w4", "diff-w5", "diff-w6", "diff-w7"];
+
+/// The class that makes a diff's line number columns as wide as the largest line number
+/// in `hunks` needs: one `ch` per digit (the CSP forbids computed `style=` widths).
+#[must_use]
+pub fn number_class(hunks: &[Hunk]) -> &'static str {
+    let largest =
+        hunks.iter().flat_map(|hunk| &hunk.lines).flat_map(|line| [line.old_number, line.new_number]).flatten().max().unwrap_or(0);
+    let digits = largest.checked_ilog10().map_or(1, |log| log as usize + 1);
+    NUMBER_CLASSES[digits.min(NUMBER_CLASSES.len()) - 1]
+}
+
+/// The class that makes a diff at least as wide as its widest line, hunk headers
+/// included ([`blocks::column_class`]).
+#[must_use]
+pub fn column_class(hunks: &[Hunk]) -> String {
+    let widest = hunks
+        .iter()
+        .flat_map(|hunk| std::iter::once(hunk.header.as_str()).chain(hunk.lines.iter().map(|line| line.text.as_str())))
+        .map(blocks::display_columns)
+        .max()
+        .unwrap_or(0);
+    blocks::column_class(widest)
+}
+
+/// The width classes of a diff of `hunks`: [`number_class`] and [`column_class`].
+#[must_use]
+pub fn width_classes(hunks: &[Hunk]) -> String {
+    format!("{} {}", number_class(hunks), column_class(hunks))
+}
+
+/// Rows a changed file's header takes (`.diff-file > summary`, app.css), its hairline
+/// included.
+pub const FILE_HEADER_ROWS: usize = 2;
+/// Rows a file body that is not a diff takes ("Binary file not shown", `.diff-placeholder`).
+pub const PLACEHOLDER_ROWS: usize = 3;
+
+/// A file's text diff: its rows (hunk headers, lines and end-of-file notes, in order) in
+/// blocks of at most [`BLOCK_ROWS`](crate::views::blocks::BLOCK_ROWS).
+#[derive(Debug, Clone)]
+pub struct DiffTextView {
+    pub blocks: Vec<Block<DiffLineView>>,
+    /// The number of rows: the diff's height in rows.
+    pub rows: usize,
+    /// Whether each block renders as its own `.vblock`: only in diffs of more than
+    /// [`BLOCKED_ABOVE_ROWS`]; shorter ones are contained as a whole file.
+    pub blocked: bool,
+    /// See [`width_classes`].
+    pub width_classes: String,
+}
+
+impl DiffTextView {
+    /// The rows of `hunks`, which they are moved out of.
+    #[must_use]
+    pub fn new(hunks: Vec<Hunk>) -> Self {
+        let width_classes = width_classes(&hunks);
+        let rows = hunks.into_iter().flat_map(|hunk| {
+            std::iter::once(DiffLineView::hunk(hunk.header)).chain(hunk.lines.into_iter().flat_map(|line| {
+                let eof = line.missing_newline.then(DiffLineView::eof);
+                std::iter::once(DiffLineView::owned_line(line)).chain(eof)
+            }))
+        });
+        let blocks = blocks(rows);
+        let rows = blocks.iter().map(Block::len).sum();
+        Self { blocks, rows, blocked: rows > BLOCKED_ABOVE_ROWS, width_classes }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DiffBodyView {
+    Text(DiffTextView),
+    Binary,
+    TooLarge,
+    NoContentChanges,
+    /// Submodule pointer change, shown as abbreviated commit ids.
+    Submodule {
+        old: String,
+        new: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct FileDiffView {
+    /// In-page anchor, e.g. `diff-3`.
+    pub anchor: String,
+    pub path: String,
+    /// `path` up to and including its last `/` (empty at the root), shown muted.
+    pub directory: String,
+    /// The last component of `path`.
+    pub name: String,
+    pub old_path: Option<String>,
+    pub status: &'static str,
+    /// CSS modifier for the status mark: `added`, `deleted`, `modified`, `renamed` or `copied`.
+    pub status_key: &'static str,
+    pub additions: usize,
+    pub deletions: usize,
+    /// False when the file wasn't diffed; the counts are then hidden.
+    pub stats_known: bool,
+    /// View the file as of this commit (absent for deletions).
+    pub view_url: Option<String>,
+    pub body: DiffBodyView,
+}
+
+impl FileDiffView {
+    /// Build the shared changed-file navigator without copying or rendering diff bodies.
+    pub fn tree(files: &[Self]) -> Vec<FileTreeRow> {
+        file_tree(files.iter().enumerate().map(|(index, file)| {
+            (&*file.path, FileTreeLeaf { index, anchor: file.anchor.clone(), status: file.status, status_key: file.status_key })
+        }))
+    }
+
+    /// The file's height in rows while open, header included: `data-rows` on the file,
+    /// its exact placeholder height (see [`crate::views::blocks`]).
+    #[must_use]
+    pub fn rows(&self) -> usize {
+        FILE_HEADER_ROWS
+            + match &self.body {
+                DiffBodyView::Text(text) => text.rows,
+                _ => PLACEHOLDER_ROWS,
+            }
+    }
+}
+
+impl FileDiffView {
+    /// Views for `files`, linking each to its version at `commit_id`. Copies the diffs;
+    /// [`Self::list_owned`] moves them instead.
+    pub fn list(files: &[FileDiff], commit_id: &str, urls: &RepoUrls) -> Vec<Self> {
+        Self::list_owned(files.to_vec(), commit_id, urls)
+    }
+
+    /// Views for `files`, moving their paths and lines into the rows.
+    pub fn list_owned(files: Vec<FileDiff>, commit_id: &str, urls: &RepoUrls) -> Vec<Self> {
+        files.into_iter().enumerate().map(|(i, f)| Self::new(i, f, commit_id, urls)).collect()
+    }
+
+    fn new(index: usize, file: FileDiff, commit_id: &str, urls: &RepoUrls) -> Self {
+        let (status, status_key) = match file.status {
+            ChangeStatus::Added => ("Added", "added"),
+            ChangeStatus::Deleted => ("Deleted", "deleted"),
+            ChangeStatus::Modified => ("Modified", "modified"),
+            ChangeStatus::Renamed => ("Renamed", "renamed"),
+            ChangeStatus::Copied => ("Copied", "copied"),
+        };
+        let split = file.path.rfind('/').map_or(0, |i| i + 1);
+        let body = match file.body {
+            FileDiffBody::Text(hunks) => DiffBodyView::Text(DiffTextView::new(hunks)),
+            FileDiffBody::Binary => DiffBodyView::Binary,
+            FileDiffBody::TooLarge => DiffBodyView::TooLarge,
+            FileDiffBody::ModeOnly => DiffBodyView::NoContentChanges,
+            FileDiffBody::Submodule { old, new } => {
+                let short = |id: &Option<String>| id.as_deref().map_or_else(|| "none".to_owned(), |id| id[..7.min(id.len())].to_owned());
+                DiffBodyView::Submodule { old: short(&old), new: short(&new) }
+            }
+        };
+        Self {
+            anchor: format!("diff-{index}"),
+            directory: file.path[..split].to_owned(),
+            name: file.path[split..].to_owned(),
+            view_url: (file.status != ChangeStatus::Deleted).then(|| urls.blob(commit_id, &file.path)),
+            path: file.path,
+            old_path: file.old_path,
+            status,
+            status_key,
+            additions: file.additions,
+            deletions: file.deletions,
+            stats_known: file.stats_known,
+            body,
+        }
+    }
+}
+
+/// One row of the changed-file tree beside a diff: a folder or a file, in display order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTreeRow {
+    /// Nesting level, 0 at the root.
+    pub depth: usize,
+    /// Display name; a folder holding only one folder is merged with it (`docs/plugins`).
+    pub name: String,
+    /// The folder's or file's full path, which scopes collapsing and filtering.
+    pub path: String,
+    /// The diff a file row links to; `None` for folders.
+    pub file: Option<FileTreeLeaf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTreeLeaf {
+    /// Position of the file's diff in the list the tree was built from.
+    pub index: usize,
+    pub anchor: String,
+    pub status: &'static str,
+    pub status_key: &'static str,
+}
+
+/// The changed files as a folder tree, flattened in display order: folders first, then
+/// files, each sorted by name (case-insensitively). The diffs are listed in the same order,
+/// so reading down the page walks down the tree.
+pub(super) fn file_tree<'a>(files: impl IntoIterator<Item = (&'a str, FileTreeLeaf)>) -> Vec<FileTreeRow> {
+    #[derive(Default)]
+    struct Folder<'a> {
+        folders: BTreeMap<&'a str, Folder<'a>>,
+        files: Vec<(&'a str, FileTreeLeaf)>,
+    }
+
+    fn sort_key(name: &str) -> (String, &str) {
+        (name.to_lowercase(), name)
+    }
+
+    fn flatten(folder: &Folder<'_>, prefix: &str, depth: usize, rows: &mut Vec<FileTreeRow>) {
+        let mut folders: Vec<_> = folder.folders.iter().collect();
+        folders.sort_by_key(|(name, _)| sort_key(name));
+        for (name, mut child) in folders {
+            let mut name = (*name).to_owned();
+            while child.files.is_empty()
+                && child.folders.len() == 1
+                && let Some((inner_name, inner)) = child.folders.iter().next()
+            {
+                name = format!("{name}/{inner_name}");
+                child = inner;
+            }
+            let path = format!("{prefix}{name}");
+            rows.push(FileTreeRow { depth, name, path: path.clone(), file: None });
+            flatten(child, &format!("{path}/"), depth + 1, rows);
+        }
+        let mut files = folder.files.clone();
+        files.sort_by(|(a, _), (b, _)| sort_key(a.rsplit('/').next().unwrap_or(a)).cmp(&sort_key(b.rsplit('/').next().unwrap_or(b))));
+        for (path, leaf) in files {
+            rows.push(FileTreeRow {
+                depth,
+                name: path.rsplit('/').next().unwrap_or(path).to_owned(),
+                path: path.to_owned(),
+                file: Some(leaf),
+            });
+        }
+    }
+
+    let mut root = Folder::default();
+    for (path, leaf) in files {
+        let mut folder = &mut root;
+        for part in path.rsplit_once('/').map_or("", |(directory, _)| directory).split('/').filter(|part| !part.is_empty()) {
+            folder = folder.folders.entry(part).or_default();
+        }
+        folder.files.push((path, leaf));
+    }
+    let mut rows = Vec::new();
+    flatten(&root, "", 0, &mut rows);
+    rows
+}
+
+#[derive(Debug, Template, WebTemplate)]
+#[template(path = "repo/commit.html")]
+pub struct CommitPage {
+    pub page: Page,
+    pub header: RepoHeader,
+    pub commit: CommitView,
+    pub body: Option<String>,
+    pub committer: Option<String>,
+    pub parents: Vec<ParentLink>,
+    pub files: Vec<FileDiffView>,
+    pub additions: usize,
+    pub deletions: usize,
+    pub truncated: bool,
+    /// The commit's checks (milestone 3, S); `None` without statuses.
+    pub checks: Option<ChecksView>,
+}
+
+impl CommitPage {
+    pub fn new(page: Page, header: RepoHeader, detail: &CommitDetail, urls: &RepoUrls) -> Self {
+        let commit = &detail.commit;
+        Self {
+            page,
+            header,
+            commit: CommitView::new(commit, urls),
+            body: commit.body.clone(),
+            committer: (detail.committer_name != commit.author_name).then(|| detail.committer_name.clone()),
+            parents: commit
+                .parent_ids
+                .iter()
+                .map(|id| ParentLink { short_id: id[..7.min(id.len())].to_owned(), url: urls.commit(id) })
+                .collect(),
+            files: FileDiffView::list(&detail.files, &commit.id, urls),
+            additions: detail.additions(),
+            deletions: detail.deletions(),
+            truncated: detail.truncated,
+            checks: None,
+        }
+    }
+
+    /// Adds the commit's combined status: the mark beside the title and the checks.
+    #[must_use]
+    pub fn with_statuses(mut self, combined: &CombinedStatus) -> Self {
+        self.commit.status = StatusMark::new(combined, format!("{}#{CHECKS_ANCHOR}", self.commit.url));
+        self.checks = ChecksView::new(&combined.statuses, &[]);
+        self
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    fn file(index: usize, path: &str, additions: usize, deletions: usize) -> FileDiffView {
+        let split = path.rfind('/').map_or(0, |i| i + 1);
+        FileDiffView {
+            anchor: format!("diff-{index}"),
+            path: path.to_owned(),
+            directory: path[..split].to_owned(),
+            name: path[split..].to_owned(),
+            old_path: None,
+            status: "Modified",
+            status_key: "modified",
+            additions,
+            deletions,
+            stats_known: true,
+            view_url: None,
+            body: DiffBodyView::NoContentChanges,
+        }
+    }
+
+    fn outline(rows: &[FileTreeRow]) -> Vec<String> {
+        rows.iter().map(|row| format!("{}{}{}", "  ".repeat(row.depth), row.name, if row.file.is_none() { "/" } else { "" })).collect()
+    }
+
+    #[test]
+    fn tree_merges_single_folder_chains_and_lists_folders_first() {
+        let files = [
+            file(0, "docs/plugins/computer-use.md", 1, 1),
+            file(1, "plugins/computer-use/overlay/font.ts", 1, 0),
+            file(2, "plugins/computer-use/overlay/Assets.d.ts", 1, 0),
+            file(3, "plugins/computer-use/index.ts", 1, 0),
+            file(4, "README.md", 1, 0),
+        ];
+        let rows = FileDiffView::tree(&files);
+        assert_eq!(
+            outline(&rows),
+            [
+                "docs/plugins/",
+                "  computer-use.md",
+                "plugins/computer-use/",
+                "  overlay/",
+                "    Assets.d.ts",
+                "    font.ts",
+                "  index.ts",
+                "README.md",
+            ]
+        );
+        assert_eq!(rows[2].path, "plugins/computer-use");
+        assert_eq!(rows[3].path, "plugins/computer-use/overlay");
+        assert_eq!(rows[4].file.as_ref().map(|leaf| leaf.anchor.as_str()), Some("diff-2"));
+    }
+
+    /// `count` lines `{prefix}{n}`, each ending in a newline.
+    pub(crate) fn numbered(prefix: &str, count: usize) -> String {
+        (0..count).map(|n| format!("{prefix}{n}\n")).collect::<Vec<_>>().concat()
+    }
+
+    fn kinds(text: &DiffTextView) -> Vec<&'static str> {
+        text.blocks.iter().flat_map(Block::rows).map(|row| row.kind).collect()
+    }
+
+    #[test]
+    fn diff_rows_are_hunk_headers_lines_and_eof_notes_in_order() {
+        let changes = rbit_git::diff::diff_bytes(b"a\nb", b"a\nc");
+        let text = DiffTextView::new(changes.hunks.clone());
+        assert_eq!(kinds(&text), ["hunk", "ctx", "del", "eof", "add", "eof"]);
+        let rows: Vec<&DiffLineView> = text.blocks.iter().flat_map(Block::rows).collect();
+        assert_eq!(rows[0].text, changes.hunks[0].header);
+        assert!(rows[0].old_number.0.is_none() && !rows[0].is_line());
+        let cells = |row: &DiffLineView| (row.old_number.to_string(), row.new_number.to_string(), row.text.to_string());
+        assert_eq!(cells(rows[2]), ("2".into(), String::new(), "b".into()));
+        assert_eq!(cells(rows[4]), (String::new(), "2".into(), "c".into()));
+        assert_eq!(rows[3].text, NO_NEWLINE);
+        assert_eq!(text.width_classes, "diff-w1 cols-16");
+    }
+
+    #[test]
+    fn a_lone_carriage_return_stays_inside_its_row() {
+        let changes = rbit_git::diff::diff_bytes(b"foo\rbar\r\n", b"foo\rbaz\r\n");
+        let text = DiffTextView::new(changes.hunks);
+        let lines: Vec<&str> = text.blocks.iter().flat_map(Block::rows).filter(|row| row.is_line()).map(|row| &*row.text).collect();
+        assert_eq!(lines, ["foo\u{240D}bar", "foo\u{240D}baz"], "shown, not a second line over the next row");
+    }
+
+    #[test]
+    fn long_diffs_split_into_full_blocks_holding_every_row_once() {
+        let old = numbered("", 300);
+        let new = numbered("x", 300);
+        let changes = rbit_git::diff::diff_bytes(old.as_bytes(), new.as_bytes());
+        let text = DiffTextView::new(changes.hunks.clone());
+        let lengths: Vec<usize> = text.blocks.iter().map(Block::len).collect();
+        let expected_rows = changes.hunks.len() + changes.hunks.iter().map(|hunk| hunk.lines.len()).sum::<usize>();
+        assert_eq!(lengths.iter().sum::<usize>(), expected_rows);
+        assert!(lengths.iter().rev().skip(1).all(|&len| len == crate::views::blocks::BLOCK_ROWS));
+        let texts: Vec<&str> = text.blocks.iter().flat_map(Block::rows).filter(|row| row.is_line()).map(|row| &*row.text).collect();
+        let source: Vec<&str> = changes.hunks.iter().flat_map(|hunk| &hunk.lines).map(|line| line.text.as_str()).collect();
+        assert_eq!(texts, source);
+        assert_eq!(text.width_classes, "diff-w3 cols-24");
+        assert_eq!(text.rows, expected_rows);
+        assert!(text.blocked, "{expected_rows} rows is more than BLOCKED_ABOVE_ROWS");
+        let short = DiffTextView::new(rbit_git::diff::diff_bytes(b"a\n", b"b\n").hunks);
+        assert_eq!((short.rows, short.blocked), (3, false));
+    }
+
+    #[test]
+    fn rows_take_their_text_from_the_diff_and_hold_no_number_strings() {
+        let line = |text: &str| DiffLine {
+            kind: LineKind::Added,
+            old_number: None,
+            new_number: Some(12),
+            text: text.to_owned(),
+            missing_newline: true,
+        };
+        let plain = line("let x = 1;");
+        let source = plain.text.as_ptr();
+        let row = DiffLineView::owned_line(plain);
+        assert_eq!(row.text.as_ptr(), source, "the line's text is moved, not copied");
+        assert_eq!((row.old_number, row.new_number), (LineNumber(None), LineNumber(Some(12))));
+        assert_eq!((row.old_number.to_string(), row.new_number.to_string()), (String::new(), "12".to_owned()));
+        // Only text that must change is copied.
+        assert_eq!(DiffLineView::owned_line(line("a\rb")).text, "a\u{240D}b");
+        assert!(matches!(DiffLineView::eof().text, Cow::Borrowed(NO_NEWLINE)), "the end-of-file note is never allocated");
+        // Two numbers and a kind take no more room than one `String` used to.
+        assert!(std::mem::size_of::<LineNumber>() * 2 <= std::mem::size_of::<String>());
+    }
+
+    #[test]
+    fn number_columns_fit_the_largest_line_number() {
+        let hunk = |old: usize, new: usize| Hunk {
+            header: String::new(),
+            lines: vec![DiffLine {
+                kind: LineKind::Context,
+                old_number: Some(old),
+                new_number: Some(new),
+                text: String::new(),
+                missing_newline: false,
+            }],
+        };
+        assert_eq!(number_class(&[]), "diff-w1");
+        assert_eq!(number_class(&[hunk(9, 9)]), "diff-w1");
+        assert_eq!(number_class(&[hunk(9, 10)]), "diff-w2");
+        assert_eq!(number_class(&[hunk(1, 2), hunk(99_999, 3)]), "diff-w5");
+        assert_eq!(number_class(&[hunk(123_456_789, 1)]), "diff-w7");
+    }
+
+    #[test]
+    fn diffs_are_as_wide_as_their_widest_line() {
+        let hunk = |texts: &[&str]| Hunk {
+            header: "@@ -1 +1 @@".to_owned(),
+            lines: texts
+                .iter()
+                .map(|text| DiffLine {
+                    kind: LineKind::Added,
+                    old_number: None,
+                    new_number: Some(1),
+                    text: (*text).to_owned(),
+                    missing_newline: false,
+                })
+                .collect(),
+        };
+        assert_eq!(column_class(&[]), "cols-8");
+        assert_eq!(column_class(&[hunk(&["x"])]), "cols-16", "the hunk header counts too");
+        assert_eq!(column_class(&[hunk(&[&"y".repeat(17)])]), "cols-24");
+        assert_eq!(column_class(&[hunk(&["a"]), hunk(&[&"z".repeat(1000)])]), "cols-256");
+        assert_eq!(width_classes(&[hunk(&["a"])]), "diff-w1 cols-16");
+    }
+
+    #[derive(Template)]
+    #[template(source = r#"{% let page = crate::views::test_support::page("/") %}{% include "repo/file_diffs.html" %}"#, ext = "html")]
+    struct Diffs {
+        files: Vec<FileDiffView>,
+        additions: usize,
+        deletions: usize,
+        truncated: bool,
+    }
+
+    /// The rows inside each `<div class="vblock" data-rows="N">` of `html`, checked to be N.
+    fn block_rows(html: &str) -> Vec<usize> {
+        html.split(r#"<div class="vblock" data-rows=""#)
+            .skip(1)
+            .map(|block| {
+                let (rows, body) = block.split_once("\">").unwrap();
+                let rows: usize = rows.parse().unwrap();
+                let body = &body[..body.find("</div>\n").unwrap_or(body.len())];
+                assert_eq!(body.matches("<div class=\"diff-").count(), rows);
+                rows
+            })
+            .collect()
+    }
+
+    #[test]
+    fn diffs_render_rows_without_tables_or_inline_styles_and_say_their_height() {
+        let old = numbered("", 200);
+        let new = format!("{}<b>\n", old.replacen("5\n", "five\n", 1));
+        let changes = rbit_git::diff::diff_bytes(old.as_bytes(), new.as_bytes());
+        let rows = changes.hunks.len() + changes.hunks.iter().map(|hunk| hunk.lines.len()).sum::<usize>();
+        let mut view = file(0, "src/a.rs", changes.additions, changes.deletions);
+        view.body = DiffBodyView::Text(DiffTextView::new(changes.hunks));
+        let mut binary = file(1, "logo.png", 0, 0);
+        binary.body = DiffBodyView::Binary;
+        let html = Diffs { files: vec![view, binary], additions: 2, deletions: 1, truncated: false }.render().unwrap();
+        assert!(!html.contains("<table") && !html.contains("style="));
+        assert!(html.contains(r#"<div class="diff-view diff-w3 cols-24">"#));
+        assert!(html.contains(r#"<div class="diff-del"><span class="num">6</span><span class="num"></span>5</div>"#));
+        assert!(html.contains(r#"<div class="diff-add"><span class="num"></span><span class="num">201</span>&#60;b&#62;</div>"#));
+        // A short diff is contained as a whole file: its header and rows, no blocks.
+        assert!(html.contains(&format!(r#"data-path="src/a.rs" data-rows="{}" open>"#, FILE_HEADER_ROWS + rows)));
+        assert!(html.contains(&format!(r#"data-path="logo.png" data-rows="{}" open>"#, FILE_HEADER_ROWS + PLACEHOLDER_ROWS)));
+        assert_eq!(block_rows(&html), [0_usize; 0]);
+        let file_html = &html[html.find(r#"id="diff-0""#).unwrap()..html.find(r#"id="diff-1""#).unwrap()];
+        let row_count = |kind: &str| file_html.matches(&format!("<div class=\"diff-{kind}\">")).count();
+        assert_eq!(["hunk", "ctx", "add", "del", "eof"].map(row_count).iter().sum::<usize>(), rows);
+
+        // A long one also has blocks, each holding exactly the rows it says.
+        let long = numbered("", 600);
+        let changes = rbit_git::diff::diff_bytes(b"", long.as_bytes());
+        let mut view = file(0, "src/long.rs", 600, 0);
+        view.body = DiffBodyView::Text(DiffTextView::new(changes.hunks));
+        let html = Diffs { files: vec![view], additions: 600, deletions: 0, truncated: false }.render().unwrap();
+        assert_eq!(block_rows(&html), [128, 128, 128, 128, 89]);
+        assert!(html.contains(&format!(r#"data-rows="{}" open>"#, FILE_HEADER_ROWS + 601)));
+    }
+
+    #[test]
+    fn diff_counts_have_visible_labels_and_hide_unknown_file_stats() {
+        for (added, deleted) in [(24, 8), (0, 0), (500, 1)] {
+            let mut unknown = file(1, "binary.dat", 0, 0);
+            unknown.stats_known = false;
+            let html =
+                Diffs { files: vec![file(0, "main.rs", added, deleted), unknown], additions: added, deletions: deleted, truncated: false }
+                    .render()
+                    .unwrap();
+            assert!(!html.contains("diffstat"), "no unlabeled proportional squares");
+            // Both the total and per-file summaries spell out what each count means.
+            assert_eq!(html.matches(&format!("<b dir=\"ltr\">+{added}</b> Added")).count(), 2);
+            assert_eq!(html.matches(&format!("<b dir=\"ltr\">−{deleted}</b> Deleted")).count(), 2);
+            let unknown = html.split("id=\"diff-1\"").nth(1).unwrap().split("</summary>").next().unwrap();
+            assert!(!unknown.contains("change-counts"), "undiffed files do not claim zero changes");
+        }
+    }
+}

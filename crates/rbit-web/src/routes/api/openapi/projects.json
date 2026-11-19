@@ -1,0 +1,1524 @@
+{
+  "paths": {
+    "/orgs/{org}/projects": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listProjects",
+        "tags": [
+          "projects"
+        ],
+        "summary": "List up to 100 organization boards",
+        "description": "Requires an unrestricted personal token and current organization membership. Board creation/settings/deletion require organization ownership and admin scope; card mutations require write scope. Hidden repository cards are never returned.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectBoard"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createProject",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create a project",
+        "description": "Requires an unrestricted personal token and current organization membership. Board creation/settings/deletion require organization ownership and admin scope; card mutations require write scope. Hidden repository cards are never returned.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBoard"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "columns"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "columns": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 12,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 60
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/projects/{id}": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getProject",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Read 100 visible cards and a next cursor",
+        "description": "Requires an unrestricted personal token and current organization membership. Board creation/settings/deletion require organization ownership and admin scope; card mutations require write scope. Hidden repository cards are never returned. Filters are applied after repository visibility and before the 100-card page limit. Sorts are ascending with unset priority/date last and issue ID ties. next_cursor is opaque and bound to the board and effective criteria; after/next remain available for id sort. A saved view permits only view, cursor or after. Overdue means an open issue with target_date before today in UTC. Progress excludes unreadable relations. can_manage and view can_edit include token scope.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repository",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "column",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "none",
+                "urgent",
+                "high",
+                "normal",
+                "low"
+              ]
+            }
+          },
+          {
+            "name": "iteration",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "0 selects cards without an iteration"
+            }
+          },
+          {
+            "name": "overdue",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "layout",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "board",
+                "table"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "priority",
+                "target_date"
+              ]
+            }
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateProject",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Rename a project or configure its columns",
+        "description": "Requires an unrestricted personal token and current organization membership. Board creation/settings/deletion require organization ownership and admin scope; card mutations require write scope. Hidden repository cards are never returned.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "columns",
+                  "revision"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "columns": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 12,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 60
+                    }
+                  },
+                  "revision": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteProject",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a project without deleting its issues",
+        "description": "Requires an unrestricted personal token and current organization membership. Board creation/settings/deletion require organization ownership and admin scope; card mutations require write scope. Hidden repository cards are never returned.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "parameters": [
+          {
+            "name": "revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/orgs/{org}/projects/{id}/cards": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "addProjectCard",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Add an issue or pull request by repository and number",
+        "description": "Requires an unrestricted personal token and current organization membership. Board creation/settings/deletion require organization ownership and admin scope; card mutations require write scope. Hidden repository cards are never returned.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "repository",
+                  "number"
+                ],
+                "properties": {
+                  "repository": {
+                    "type": "string"
+                  },
+                  "number": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/projects/{id}/cards/{issue}": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "issue",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "moveProjectCard",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Move an open card with its current revision",
+        "description": "Requires an unrestricted personal token and current organization membership. Board creation/settings/deletion require organization ownership and admin scope; card mutations require write scope. Hidden repository cards are never returned.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "column",
+                  "revision"
+                ],
+                "properties": {
+                  "column": {
+                    "type": "integer"
+                  },
+                  "revision": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeProjectCard",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Remove a card with its current revision",
+        "description": "Requires an unrestricted personal token and current organization membership. Board creation/settings/deletion require organization ownership and admin scope; card mutations require write scope. Hidden repository cards are never returned.",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "parameters": [
+          {
+            "name": "revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/orgs/{org}/projects/{id}/cards/{issue}/planning": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "issue",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "setProjectPlanning",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Replace planning fields using the current card revision; requires write scope",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectPlanningInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/projects/{id}/iterations": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listProjectIterations",
+        "tags": [
+          "projects"
+        ],
+        "summary": "List bounded visible project iterations",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectIteration"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "description": "Iterations require admin scope and current organization ownership for mutations; at most 200 per board. Archived iterations retain assignments but reject new assignments. Assigned iterations cannot be deleted; deleting an unassigned iteration also removes views selecting it."
+      },
+      "post": {
+        "operationId": "createProjectIteration",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create a project iteration",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectIterationInput"
+              }
+            }
+          }
+        },
+        "description": "Iterations require admin scope and current organization ownership for mutations; at most 200 per board. Archived iterations retain assignments but reject new assignments. Assigned iterations cannot be deleted; deleting an unassigned iteration also removes views selecting it."
+      }
+    },
+    "/orgs/{org}/projects/{id}/iterations/{iteration}": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "iteration",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateProjectIteration",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Replace a project iteration at its current revision",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ProjectIterationInput"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "revision": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "revision"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "description": "Iterations require admin scope and current organization ownership for mutations; at most 200 per board. Archived iterations retain assignments but reject new assignments. Assigned iterations cannot be deleted; deleting an unassigned iteration also removes views selecting it."
+      },
+      "delete": {
+        "operationId": "deleteProjectIteration",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a project iteration at its current revision",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "parameters": [
+          {
+            "name": "revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "description": "Iterations require admin scope and current organization ownership for mutations; at most 200 per board. Archived iterations retain assignments but reject new assignments. Assigned iterations cannot be deleted; deleting an unassigned iteration also removes views selecting it."
+      }
+    },
+    "/orgs/{org}/projects/{id}/views": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listProjectViews",
+        "tags": [
+          "projects"
+        ],
+        "summary": "List bounded visible project views",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "description": "At most 50 shared views and 50 personal views per actor per board. Personal mutations require write scope and their creator; shared mutations require admin scope and current organization ownership. Sharing scope is immutable. Private views and repository-bound views whose repository is inaccessible or transferred are hidden. Store only criteria, without pagination or nested view selectors."
+      },
+      "post": {
+        "operationId": "createProjectView",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create a project view",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectViewInput"
+              }
+            }
+          }
+        },
+        "description": "At most 50 shared views and 50 personal views per actor per board. Personal mutations require write scope and their creator; shared mutations require admin scope and current organization ownership. Sharing scope is immutable. Private views and repository-bound views whose repository is inaccessible or transferred are hidden. Store only criteria, without pagination or nested view selectors."
+      }
+    },
+    "/orgs/{org}/projects/{id}/views/{view}": {
+      "parameters": [
+        {
+          "name": "org",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "view",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateProjectView",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Replace a project view at its current revision",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ProjectViewInput"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "revision": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "revision"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "description": "At most 50 shared views and 50 personal views per actor per board. Personal mutations require write scope and their creator; shared mutations require admin scope and current organization ownership. Sharing scope is immutable. Private views and repository-bound views whose repository is inaccessible or transferred are hidden. Store only criteria, without pagination or nested view selectors."
+      },
+      "delete": {
+        "operationId": "deleteProjectView",
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a project view at its current revision",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Revision changed; reload before retrying"
+          },
+          "422": {
+            "description": "Invalid input or project resource limit"
+          }
+        },
+        "parameters": [
+          {
+            "name": "revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "description": "At most 50 shared views and 50 personal views per actor per board. Personal mutations require write scope and their creator; shared mutations require admin scope and current organization ownership. Sharing scope is immutable. Private views and repository-bound views whose repository is inaccessible or transferred are hidden. Store only criteria, without pagination or nested view selectors."
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ProjectBoard": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "title",
+          "columns",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "ProjectCard": {
+        "type": "object",
+        "required": [
+          "issue_id",
+          "number",
+          "repository",
+          "title",
+          "kind",
+          "state",
+          "column",
+          "revision",
+          "automatic",
+          "progress",
+          "priority",
+          "iteration_id",
+          "target_date",
+          "overdue"
+        ],
+        "properties": {
+          "issue_id": {
+            "type": "integer"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          "column": {
+            "type": "integer"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "automatic": {
+            "type": "boolean"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/IssueRelationProgress"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "none",
+              "urgent",
+              "high",
+              "normal",
+              "low"
+            ]
+          },
+          "iteration_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "target_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "overdue": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProjectPage": {
+        "type": "object",
+        "required": [
+          "board",
+          "cards",
+          "next",
+          "can_manage",
+          "iterations",
+          "views",
+          "filter",
+          "next_cursor"
+        ],
+        "properties": {
+          "board": {
+            "$ref": "#/components/schemas/ProjectBoard"
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectCard"
+            }
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "can_manage": {
+            "type": "boolean"
+          },
+          "iterations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectIteration"
+            }
+          },
+          "views": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectView"
+            }
+          },
+          "filter": {
+            "$ref": "#/components/schemas/ProjectCriteria"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProjectCriteria": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "column": {
+            "type": "integer"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "none",
+              "urgent",
+              "high",
+              "normal",
+              "low"
+            ]
+          },
+          "iteration": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0 selects cards without an iteration"
+          },
+          "overdue": {
+            "type": "boolean"
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "board",
+              "table"
+            ]
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "id",
+              "priority",
+              "target_date"
+            ]
+          }
+        },
+        "required": []
+      },
+      "ProjectIterationInput": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "starts_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "ends_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "title",
+          "starts_on",
+          "ends_on"
+        ]
+      },
+      "ProjectIteration": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProjectIterationInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "revision": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ]
+          }
+        ]
+      },
+      "ProjectPlanningInput": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "none",
+              "urgent",
+              "high",
+              "normal",
+              "low"
+            ]
+          },
+          "iteration_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "target_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          }
+        },
+        "required": [
+          "revision",
+          "priority"
+        ]
+      },
+      "ProjectViewInput": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "shared": {
+            "type": "boolean"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/ProjectCriteria"
+          }
+        },
+        "required": [
+          "title",
+          "filter"
+        ]
+      },
+      "ProjectView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProjectViewInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "revision": {
+                "type": "integer"
+              },
+              "can_edit": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "revision",
+              "can_edit"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+
+<header class="mb-6 flex items-center gap-3">
+  {% if let Some(user) = page.viewer %}
+  {% call ui::avatar(user.avatar, "size-10 text-[13px]") %}{% endcall %}
+  <div class="min-w-0 flex-1">
+    <h1 class="truncate text-lg font-semibold tracking-tight">{{ user.label }}</h1>
+    <p class="truncate text-[13px] text-ink-muted">{% if user.label != user.name %}{{ user.name }} · {% endif %}<a href="/{{ user.name }}" class="hover:text-ink">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::ViewProfile) %}{% endcall %}</a></p>
+  </div>
+  {% endif %}
+  <a href="/new" class="btn btn-primary">{% call ui::icon("plus", "size-3.5") %}{% endcall %}<span class="sm:hidden">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::New) %}{% endcall %}</span><span class="hidden sm:inline">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::NewRepository) %}{% endcall %}</span></a>
+</header>
+
+<nav class="mb-4 flex gap-4 text-[13px]" aria-label="{{ page.text(rbit_localization::shell::home::HomeMessage::PersonalDashboards) }}"><a href="/issues" class="link">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::Issues) %}{% endcall %}</a><a href="/pulls" class="link">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::PullRequests) %}{% endcall %}</a></nav>
+
+<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+  <section class="box self-start" aria-labelledby="repos-title">
+    <div class="box-header flex-wrap gap-y-2 py-2">
+      <h2 id="repos-title" class="box-title">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::Repositories) %}{% endcall %}</h2>
+      <span class="badge tabular-nums" id="dashboard-repos-count" title="{{ page.text(rbit_localization::shell::home::HomeMessage::PrivateCount(self.private_count())) }}">{{ repos.len() }}</span>
+      {% if !repos.is_empty() %}
+      <div class="relative order-last w-full sm:order-none sm:ms-auto sm:w-56">
+        {% call ui::icon("search", "pointer-events-none absolute inset-s-2.5 top-1/2 size-3.5 -translate-y-1/2 text-ink-faint") %}{% endcall %}
+        <input class="input h-9 ps-8 text-[13px] sm:h-8" type="search" placeholder="{{ page.text(rbit_localization::shell::home::HomeMessage::FindRepository) }}" aria-label="{{ page.text(rbit_localization::shell::home::HomeMessage::FilterRepositories) }}" aria-controls="dashboard-repos" autocapitalize="none" spellcheck="false" autocomplete="off" data-filter="dashboard-repos" data-filter-count="dashboard-repos-count">
+      </div>
+      {% endif %}
+    </div>
+    {% if repos.is_empty() %}
+    {% call ui::localized_empty_state("repo", page.text(rbit_localization::shell::home::HomeMessage::NoRepositories), page.text(rbit_localization::shell::home::HomeMessage::NoRepositoriesText)) %}{% endcall %}
+    <div class="-mt-8 flex justify-center pb-10"><a href="/new" class="btn">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::CreateRepository) %}{% endcall %}</a></div>
+    {% else %}
+    <ul id="dashboard-repos" class="filter-list">
+      {% for repo in repos %}
+      <li class="border-b border-line" data-filter-text="{{ Self::filter_text(repo) }}">
+        <a href="{{ repo.url }}" class="flex items-start gap-3 px-4 py-3 hover:bg-subtle">
+          {% if repo.is_private %}{% call ui::icon("lock", "mt-0.5 size-4 shrink-0 text-ink-faint") %}{% endcall %}{% else %}{% call ui::icon("repo", "mt-0.5 size-4 shrink-0 text-ink-faint") %}{% endcall %}{% endif %}
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <span class="truncate font-medium"><span class="text-ink-muted">{{ repo.owner }}/</span>{{ repo.name }}</span>
+              {% if repo.is_private %}<span class="badge">{% call ui::text(page, rbit_localization::shell::pages::PageMessage::Private) %}{% endcall %}</span>{% endif %}
+              {% if repo.is_archived %}<span class="badge">{% call ui::text(page, rbit_localization::shell::pages::PageMessage::Archived) %}{% endcall %}</span>{% endif %}
+            </div>
+            {% if let Some(description) = repo.description %}
+            <p class="mt-0.5 line-clamp-2 text-[13px] text-ink-muted sm:line-clamp-1">{{ description }}</p>
+            {% endif %}
+          </div>
+          <div class="flex shrink-0 items-center gap-3 text-xs text-ink-faint">
+            {% if repo.star_count > 0 %}<span class="flex items-center gap-1" title="{{ page.text(rbit_localization::shell::pages::PageMessage::Stars(*repo.star_count)) }}">{% call ui::icon("star", "size-3") %}{% endcall %}{{ repo.star_count }}</span>{% endif %}
+            <time datetime="{{ repo.updated_iso }}">{% call ui::localized(repo.updated.relative(page.locale)) %}{% endcall %}</time>
+          </div>
+        </a>
+      </li>
+      {% endfor %}
+      <li class="px-4 py-10 text-center text-[13px] text-ink-muted" data-filter-empty hidden>{% call ui::text(page, rbit_localization::shell::home::HomeMessage::NoFilterMatch) %}{% endcall %}</li>
+    </ul>
+    {% endif %}
+  </section>
+
+  <aside class="flex flex-col gap-6">
+    <section class="box" aria-labelledby="orgs-title">
+      <div class="box-header">
+        <h2 id="orgs-title" class="box-title">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::Organizations) %}{% endcall %}</h2>
+        {% if !orgs.is_empty() %}<span class="badge tabular-nums">{{ orgs.len() }}</span>{% endif %}
+        {% if can_create_org %}<a href="/organizations/new" class="btn btn-ghost btn-icon -me-2 ms-auto" aria-label="{{ page.text(rbit_localization::shell::home::HomeMessage::NewOrganization) }}" title="{{ page.text(rbit_localization::shell::home::HomeMessage::NewOrganization) }}">{% call ui::icon("plus", "size-4") %}{% endcall %}</a>{% endif %}
+      </div>
+      {% if orgs.is_empty() %}
+      <p class="px-4 py-6 text-center text-[13px] text-ink-muted">
+        {% call ui::text(page, rbit_localization::shell::home::HomeMessage::NotAMember) %}{% endcall %}
+        {% if can_create_org %}<a href="/organizations/new" class="link">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::CreateOne) %}{% endcall %}</a> {% call ui::text(page, rbit_localization::shell::home::HomeMessage::ShareWithTeam) %}{% endcall %}{% endif %}
+      </p>
+      {% else %}
+      <ul>
+        {% for org in orgs %}
+        <li class="border-b border-line last:border-b-0">
+          <a href="{{ org.url }}" class="flex items-center gap-2.5 px-4 py-2.5 hover:bg-subtle">
+            {% call ui::avatar(org.avatar, "size-5 rounded text-[9px]") %}{% endcall %}
+            <span class="min-w-0 flex-1 truncate text-[13px]">{{ org.label }}</span>
+            <span class="shrink-0 text-xs text-ink-faint">{{ org.role_label }}</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+
+    <section class="box" aria-labelledby="recent-title">
+      <div class="box-header justify-between">
+        <h2 id="recent-title" class="box-title">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::RecentlyUpdated) %}{% endcall %}</h2>
+        {% if page.show_explore %}<a href="/explore" class="text-[13px] text-ink-muted hover:text-ink">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::Explore) %}{% endcall %}</a>{% endif %}
+      </div>
+      {% if recent.is_empty() %}
+      <p class="px-4 py-6 text-center text-[13px] text-ink-muted">{% call ui::text(page, rbit_localization::shell::home::HomeMessage::NothingPublic) %}{% endcall %}</p>
+      {% else %}
+      <ul>
+        {% for repo in recent %}
+        <li class="border-b border-line last:border-b-0">
+          <a href="{{ repo.url }}" class="flex items-center gap-2.5 px-4 py-2.5 hover:bg-subtle">
+            {% call ui::avatar(repo.owner_avatar, "size-5 text-[9px]") %}{% endcall %}
+            <span class="min-w-0 flex-1 truncate text-[13px]"><span class="text-ink-muted">{{ repo.owner }}/</span>{{ repo.name }}</span>
+            <time class="shrink-0 text-xs text-ink-faint" datetime="{{ repo.updated_iso }}">{% call ui::localized(repo.updated.relative(page.locale)) %}{% endcall %}</time>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+  </aside>
+</div>
+{% endblock %}

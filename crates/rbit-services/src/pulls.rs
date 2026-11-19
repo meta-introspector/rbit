@@ -1,0 +1,722 @@
+//! Pull requests: creation across a fork network, `refs/pull/{n}/head`, head and base
+//! updates, mergeability, reviews and merging on a temporary repository.
+//!
+//! Milestone 2 workstream P (pull requests) owns this file and `pulls/**`.
+//!
+//! Hooks other code calls (signatures fixed by `docs/design/milestone-2b.md` §3):
+//! [`hooks::payload`] (webhooks) and [`lifecycle::check_reopen`] (the timeline's reopen).
+//!
+//! # Pieces
+//!
+//! * [`network`](PullService::network) and [`compare`](PullService::compare) — the fork
+//!   network and cross-repository comparisons through an object overlay
+//!   (`rbit_git::overlay`), so nothing is written before a pull request exists;
+//! * [`create`](PullService::create) — the thread and the pull request in one
+//!   transaction, then `refs/pull/{n}/head` in the base repository;
+//! * `pulls/background.rs` — head and base pushes (`RepositoryPushed`), the mergeability
+//!   worker and the start-up sweep of temporary directories;
+//! * `pulls/reviews.rs` — line comments, reviews, dismissals and review requests;
+//! * `pulls/merging.rs` — the merge box and merging (`rbit_git::merge`), serialised per
+//!   base repository and bounded instance-wide;
+//! * [`json`] and [`hooks`] — GitHub-shaped objects and the `pull_request` and
+//!   `pull_request_review` payloads.
+//!
+//! Comments, the title, the description, closing, reopening and locking go through the shared [`crate::TimelineService`];
+//! this service never writes the issue tables itself except through `PullStore::create` (which uses `IssueStore::insert_in`).
+
+mod background;
+mod codeowners;
+mod creation;
+mod publication_work;
+mod security;
+// Agent loop: pr ensure.
+pub mod ensure;
+pub mod hooks;
+// Agent loop: diff manifest and review inbox.
+pub mod inbox;
+pub mod json;
+pub mod lifecycle;
+mod merging;
+// Agent loop: the merge queue.
+pub mod queue;
+mod review_requests;
+// Agent loop: server-side writes.
+pub mod conflicts;
+pub mod review_workflow;
+mod reviews;
+mod writes;
+
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, PoisonError, atomic::AtomicBool},
+};
+
+use rbit_collaboration::pulls::{
+    BaseChange, BaseChangeFacts, CLOSED, PullCreation, PullCreationAccess, PullInput, exposes_private_head, list_badges, list_offset,
+    may_edit_pull, plan_base_change, select_head,
+};
+use rbit_core::access::repo_access;
+use rbit_core::{
+    Account, AccountId, Issue, IssueNumber, RepoAccess, RepoId, Timestamp, User,
+    issue::IssueAction,
+    pull::{HeadSpec, PullRequest},
+    repository::OwnedRepository,
+};
+use rbit_git::{CommitSummary, DiffLimits, compare::Comparison, overlay::Overlay, pull_refs};
+use rbit_storage::kv::CachedComparisonCounts;
+use tokio::sync::{Notify, Semaphore};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+use creation::{CreationView, creation_error};
+
+pub use rbit_collaboration::pulls::review_threads;
+pub use rbit_storage::sqlite::pulls::{PullFilter, PullSort, PullStateFilter};
+
+/// The file limit of the diffs whose counts are cached: the default one.
+fn counted_max_files() -> u64 {
+    u64::try_from(DiffLimits::default().max_files).unwrap_or(u64::MAX)
+}
+
+/// The cached counts of comparing `head` against `base` (full commit ids) under the
+/// default diff limits. Cache failures are logged and read as a miss.
+///
+/// The cache is shared by every repository: pass only ids the caller already knows the
+/// reader may see (a pull request's own base and head), never ids from a request.
+async fn cached_comparison(ctx: &ServiceContext, base: &str, head: &str) -> Option<CachedComparisonCounts> {
+    match ctx.kv.insights().comparison_counts(base, head).await {
+        // Counted under another file limit (an older or newer server): not this answer.
+        Ok(counts) => counts.filter(|counts| counts.max_files == counted_max_files()),
+        Err(error) => {
+            tracing::warn!(%error, "comparison cache read failed");
+            None
+        }
+    }
+}
+
+/// What the comparison cache keeps of `comparison`, made with the default diff limits.
+fn comparison_counts(comparison: &Comparison) -> CachedComparisonCounts {
+    let count = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    CachedComparisonCounts {
+        ahead: count(comparison.ahead),
+        files: count(comparison.files.len()),
+        max_files: counted_max_files(),
+        additions: count(comparison.additions()),
+        deletions: count(comparison.deletions()),
+    }
+}
+
+/// Remembers the counts of `comparison`, made with the default diff limits, under the
+/// commit ids it resolved (so a short id never fills the cache). For callers that just
+/// missed the cache; [`remember_new_comparison`] checks first.
+async fn remember_comparison(ctx: &ServiceContext, comparison: &Comparison) {
+    if let Err(error) =
+        ctx.kv.insights().put_comparison_counts(&comparison.base.id, &comparison.head.id, comparison_counts(comparison)).await
+    {
+        tracing::warn!(%error, "comparison cache write failed");
+    }
+}
+
+/// [`remember_comparison`], unless the cache already holds exactly these counts: a
+/// Files changed view usually diffs a pair it counted before, and a redb write
+/// transaction (a file sync) for an unchanged entry is wasted.
+async fn remember_new_comparison(ctx: &ServiceContext, comparison: &Comparison) {
+    if cached_comparison(ctx, &comparison.base.id, &comparison.head.id).await != Some(comparison_counts(comparison)) {
+        remember_comparison(ctx, comparison).await;
+    }
+}
+
+/// What a pull request's header counts: commits ahead and changed files.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PullCounts {
+    pub ahead: usize,
+    pub files: usize,
+}
+
+impl PullCounts {
+    pub fn of(comparison: &Comparison) -> Self {
+        Self { ahead: comparison.ahead, files: comparison.files.len() }
+    }
+}
+
+pub use self::{
+    merging::{Blocked, MergeBox, MergeFailure, MergeInput, MergeReadiness, merge_codes},
+    reviews::{LineComment, ReviewData, ReviewEntry, ReviewVerdict},
+};
+use crate::{
+    DomainEvent, ProtectionService, PushService, RepoContext, RepositoryService, ServiceContext, ServiceError, ThrottleScope,
+    ThrottleService, TimelineService, repositories::viewer_grants, timeline::IssueContext,
+};
+
+/// Pull requests per page of a list.
+pub const PAGE_SIZE: u32 = 25;
+
+/// A pull request opened for one viewer: the thread (with the viewer's permissions), the
+/// pull request row and the repository its head comes from (`None` once deleted).
+#[derive(Debug, Clone)]
+pub struct PullContext {
+    pub thread: IssueContext,
+    pub pull: PullRequest,
+    pub head_repo: Option<OwnedRepository>,
+}
+
+impl PullContext {
+    pub fn repo(&self) -> &RepoContext {
+        &self.thread.repo
+    }
+
+    pub fn issue(&self) -> &Issue {
+        &self.thread.issue
+    }
+
+    /// `owner:branch` for heads in another repository, else `branch` (GitHub's head label).
+    pub fn head_label(&self) -> String {
+        match (&self.head_repo, self.pull.is_cross_repository()) {
+            (Some(head), true) => format!("{}:{}", head.owner.name, self.pull.head_branch),
+            (None, true) => format!("unknown:{}", self.pull.head_branch),
+            _ => self.pull.head_branch.clone(),
+        }
+    }
+
+    /// `owner/branch` of the head, for the default merge commit message.
+    pub fn head_owner_branch(&self) -> String {
+        let owner = self.head_repo.as_ref().map_or_else(|| "unknown".to_owned(), |head| head.owner.name.to_string());
+        format!("{owner}/{}", self.pull.head_branch)
+    }
+}
+
+/// What a new pull request proposes, as submitted.
+#[derive(Debug, Clone, Default)]
+pub struct NewPullInput {
+    pub base_branch: String,
+    pub head_branch: String,
+    /// Empty: the single commit's summary, or the branch name.
+    pub title: String,
+    pub body: String,
+    pub draft: bool,
+}
+
+/// One row of a pull request list.
+#[derive(Debug, Clone)]
+pub struct PullListItem {
+    pub issue: Issue,
+    pub pull: PullRequest,
+    pub author: Option<Account>,
+    pub approvals: usize,
+    pub changes_requested: usize,
+}
+
+/// One page of a list, with the totals for the Open / Closed tabs.
+#[derive(Debug, Clone, Default)]
+pub struct PullList {
+    pub items: Vec<PullListItem>,
+    /// Matching the filter, across pages.
+    pub total: u64,
+    pub open: u64,
+    pub closed: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PullService {
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    ctx: ServiceContext,
+    timeline: TimelineService,
+    throttle: ThrottleService,
+    pushes: PushService,
+    protection: ProtectionService,
+    repositories: RepositoryService,
+    /// One merge at a time per base repository.
+    merge_locks: Mutex<HashMap<RepoId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Merges running at once, instance-wide.
+    merge_slots: Semaphore,
+    publication_work: publication_work::Work,
+    /// Trial merges running at once.
+    trial_slots: Arc<Semaphore>,
+    review_work: review_workflow::Work,
+    /// Serialize immediate and background push projections.
+    push_projection: tokio::sync::Mutex<()>,
+    /// Wakes the mergeability worker.
+    wake: Notify,
+    shutdown: CancellationToken,
+    tasks: TaskTracker,
+    started: AtomicBool,
+}
+
+impl PullService {
+    /// Builds the service on the shared timeline and throttle, so pull requests and
+    /// reviews spend the same content budget as comments.
+    pub(crate) fn with_shared(ctx: ServiceContext, timeline: TimelineService, throttle: ThrottleService) -> Self {
+        let config = &ctx.config.pulls;
+        let repositories = RepositoryService::new(&ctx);
+        Self {
+            inner: Arc::new(Inner {
+                timeline,
+                throttle,
+                pushes: PushService::new(ctx.clone()),
+                protection: ProtectionService::new(ctx.clone()),
+                repositories,
+                merge_locks: Mutex::new(HashMap::new()),
+                merge_slots: Semaphore::new(config.max_concurrent_merges.max(1)),
+                publication_work: publication_work::Work::new(config.max_concurrent_merges),
+                trial_slots: Arc::new(Semaphore::new(config.mergeability_concurrency.max(1))),
+                review_work: review_workflow::Work::default(),
+                push_projection: tokio::sync::Mutex::new(()),
+                wake: Notify::new(),
+                shutdown: CancellationToken::new(),
+                tasks: TaskTracker::new(),
+                started: AtomicBool::new(false),
+                ctx,
+            }),
+        }
+    }
+
+    fn ctx(&self) -> &ServiceContext {
+        &self.inner.ctx
+    }
+
+    fn git_binary(&self) -> &std::path::Path {
+        &self.inner.ctx.config.repository.git_binary
+    }
+
+    // ------------------------------------------------------------- network and compare
+
+    /// The repositories of `repo`'s fork network that `viewer` may read (including `repo`).
+    pub async fn network(&self, viewer: Option<&User>, repo: &RepoContext) -> Result<Vec<OwnedRepository>, ServiceError> {
+        crate::forks::network(&self.ctx().database, viewer, repo.repo.repo.id).await
+    }
+
+    /// The head repository a [`HeadSpec`] names, opened for `viewer`: `base` itself, the
+    /// spec owner's repository in `base`'s network (the one named like `base` first), or
+    /// `owner/name`. `NotFound` for anything outside the network or hidden from `viewer`.
+    pub async fn resolve_head(&self, viewer: Option<&User>, base: &RepoContext, spec: &HeadSpec) -> Result<RepoContext, ServiceError> {
+        let Some(owner) = &spec.owner else { return Ok(base.clone()) };
+        let network = self.network(viewer, base).await?;
+        let found = select_head(&network, owner, spec.repo.as_deref(), base.repo.repo.name.as_str()).ok_or(ServiceError::NotFound)?;
+        if found.repo.id == base.repo.repo.id {
+            return Ok(base.clone());
+        }
+        self.inner.repositories.open(viewer, found.owner.name.as_str(), found.repo.name.as_str()).await
+    }
+
+    /// Compares `head_rev` of `head` against `base_rev` of `base` (branches, tags or ids
+    /// in their own repository). Across repositories this reads both through a temporary
+    /// object overlay.
+    pub async fn compare(
+        &self,
+        base: &RepoContext,
+        base_rev: &str,
+        head: &RepoContext,
+        head_rev: &str,
+        limits: DiffLimits,
+        max_commits: usize,
+    ) -> Result<Comparison, ServiceError> {
+        self.compare_counting(base, base_rev, head, head_rev, limits, max_commits, true).await
+    }
+
+    /// [`Self::compare`], counting the commits behind only when `count_behind` is set
+    /// (see [`rbit_git::RepositoryReader::compare_ahead`]).
+    #[allow(clippy::too_many_arguments)] // `compare`'s arguments plus the one switch.
+    async fn compare_counting(
+        &self,
+        base: &RepoContext,
+        base_rev: &str,
+        head: &RepoContext,
+        head_rev: &str,
+        limits: DiffLimits,
+        max_commits: usize,
+        count_behind: bool,
+    ) -> Result<Comparison, ServiceError> {
+        let compare = |reader: &rbit_git::RepositoryReader, base: String, head: String| {
+            let reader = reader.clone();
+            async move {
+                if count_behind {
+                    reader.compare(base, head, limits, max_commits).await
+                } else {
+                    reader.compare_ahead(base, head, limits, max_commits).await
+                }
+            }
+        };
+        if base.repo.repo.id == head.repo.repo.id {
+            return Ok(compare(&base.reader, base_rev.to_owned(), head_rev.to_owned()).await?);
+        }
+        let base_id = base.reader.commit_id(base_rev.to_owned()).await?;
+        let head_id = head.reader.commit_id(head_rev.to_owned()).await?;
+        let overlay = self.overlay(base, head).await?;
+        let comparison = compare(&overlay.reader(), base_id, head_id).await;
+        drop(overlay);
+        Ok(comparison?)
+    }
+
+    async fn overlay(&self, base: &RepoContext, head: &RepoContext) -> Result<Overlay, ServiceError> {
+        let storage = &self.ctx().repositories;
+        let (base_lease, head_lease) = (storage.lease(base.repo.repo.id).await, storage.lease(head.repo.repo.id).await);
+        let overlay = Overlay::create(&self.ctx().config.storage.tmp_dir(), &[&base.disk_path, &head.disk_path]).await?;
+        Ok(overlay.holding(base_lease).holding(head_lease))
+    }
+
+    // ------------------------------------------------------------- creating
+
+    /// Opens a pull request from `input.head_branch` of `head` into `input.base_branch` of
+    /// `base` (both opened for `actor`, in one fork network).
+    pub async fn create(
+        &self,
+        actor: &User,
+        base: &RepoContext,
+        head: &RepoContext,
+        input: NewPullInput,
+    ) -> Result<(Issue, PullRequest), ServiceError> {
+        let access = PullCreationAccess {
+            same_repo: base.repo.repo.id == head.repo.repo.id,
+            base_readable: base.access.can_read(),
+            head_readable: head.access.can_read(),
+            base_archived: base.repo.repo.is_archived(),
+            private_head_into_public_base: exposes_private_head(
+                base.repo.repo.visibility.is_public(),
+                head.repo.repo.visibility.is_public(),
+            ),
+        };
+        let input = PullInput {
+            base_branch: &input.base_branch,
+            head_branch: &input.head_branch,
+            title: &input.title,
+            body: &input.body,
+            draft: input.draft,
+        };
+        let view = CreationView { service: self, actor, base, head };
+        let (issue, mut pull) = PullCreation::new(&view, access).create(input, || self.spend(actor)).await.map_err(creation_error)?;
+        match self.store_head(base, head, &pull, issue.number).await {
+            Ok(stored) if stored != pull.head_sha => {
+                self.ctx().database.pulls().set_head(issue.id, &stored, Timestamp::now()).await?;
+                pull.head_sha = stored;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, pull = issue.id.0, "cannot store refs/pull/{}/head; the next push retries", issue.number.get());
+            }
+        }
+        tracing::info!(actor = %actor.name(), repo = %base.repo.full_name(), number = issue.number.get(), "pull request opened");
+        self.publish(&issue, Some(actor.id()), IssueAction::Opened);
+        self.route_code_owners(base, &issue, &pull).await;
+        self.inner.wake.notify_one();
+        Ok((issue, pull))
+    }
+
+    /// Points `refs/pull/{n}/head` of `base` at the head: `update-ref` for the same
+    /// repository, a fetch from a fork. Returns the id it now points at.
+    async fn store_head(
+        &self,
+        base: &RepoContext,
+        head: &RepoContext,
+        pull: &PullRequest,
+        number: IssueNumber,
+    ) -> Result<String, ServiceError> {
+        let storage = &self.ctx().repositories;
+        let _base_lease = storage.lease(base.repo.repo.id).await;
+        if base.repo.repo.id == head.repo.repo.id {
+            pull_refs::set(self.git_binary(), &base.disk_path, number.get(), &pull.head_sha).await?;
+            return Ok(pull.head_sha.clone());
+        }
+        let _head_lease = storage.lease(head.repo.repo.id).await;
+        Ok(pull_refs::fetch(self.git_binary(), &base.disk_path, &head.disk_path, &pull.head_branch, number.get()).await?)
+    }
+
+    // ------------------------------------------------------------- reading
+
+    /// Pull request `number` of `repo` (already opened for `viewer`). `NotFound` when it
+    /// does not exist or is an issue (callers redirect issue numbers themselves).
+    pub async fn open(&self, viewer: Option<&User>, repo: RepoContext, number: IssueNumber) -> Result<PullContext, ServiceError> {
+        let thread = self.inner.timeline.reader().open(viewer, repo, number).await?;
+        if !thread.issue.is_pull() {
+            return Err(ServiceError::NotFound);
+        }
+        self.context(thread).await
+    }
+
+    /// The pull request of an already opened thread (of kind `Pull`).
+    pub async fn context(&self, thread: IssueContext) -> Result<PullContext, ServiceError> {
+        let pull = self.ctx().database.pulls().find(thread.issue.id).await?.ok_or(ServiceError::NotFound)?;
+        let head_repo = match pull.head_repo_id {
+            Some(id) if id == pull.repo_id => Some(thread.repo.repo.clone()),
+            Some(id) => self.ctx().database.admin().find_repository(id).await?,
+            None => None,
+        };
+        Ok(PullContext { thread, pull, head_repo })
+    }
+
+    /// One page (1-based) of `repo`'s pull requests matching `filter`.
+    pub async fn list(&self, repo: &RepoContext, filter: &PullFilter, page: u32) -> Result<PullList, ServiceError> {
+        self.list_page(repo, filter, PAGE_SIZE, list_offset(page, PAGE_SIZE)).await
+    }
+
+    /// `limit` pull requests from `offset`, for the API's own pagination.
+    pub async fn list_page(&self, repo: &RepoContext, filter: &PullFilter, limit: u32, offset: u32) -> Result<PullList, ServiceError> {
+        let store = self.ctx().database.pulls();
+        let id = repo.repo.repo.id;
+        let open_filter = PullFilter { state: PullStateFilter::Open, ..filter.clone() };
+        let closed_filter = PullFilter { state: PullStateFilter::Closed, ..filter.clone() };
+        let (rows, total, open, closed) = tokio::try_join!(
+            store.list(id, filter, limit, offset),
+            store.count(id, filter),
+            store.count(id, &open_filter),
+            store.count(id, &closed_filter)
+        )?;
+        let ids: Vec<_> = rows.iter().map(|(issue, _)| issue.id).collect();
+        let authors: Vec<AccountId> = rows.iter().filter_map(|(issue, _)| issue.author).collect();
+        let (review_store, account_store) = (self.ctx().database.reviews(), self.ctx().database.accounts());
+        let (reviews, accounts) = tokio::try_join!(review_store.submitted_among(&ids), account_store.find_accounts(&authors))?;
+        let accounts: HashMap<AccountId, Account> = accounts.into_iter().map(|account| (account.id, account)).collect();
+        let mut items = Vec::with_capacity(rows.len());
+        for (issue, pull) in rows {
+            let (approvals, changes_requested) =
+                list_badges(reviews.get(&issue.id).map_or(&[][..], Vec::as_slice), issue.author, &pull.head_sha);
+            items.push(PullListItem {
+                author: issue.author.and_then(|id| accounts.get(&id).cloned()),
+                approvals,
+                changes_requested,
+                issue,
+                pull,
+            });
+        }
+        Ok(PullList { items, total, open, closed })
+    }
+
+    /// Search pull requests through the same query and metadata filters as issues.
+    pub async fn search(&self, repo: &RepoContext, results: &crate::issues::IssueSearchResults) -> Result<Vec<PullListItem>, ServiceError> {
+        if !repo.access.can_read() {
+            return Err(ServiceError::NotFound);
+        }
+        let ids: Vec<_> =
+            results.issues.iter().filter(|issue| issue.repo_id == repo.repo.repo.id && issue.is_pull()).map(|issue| issue.id).collect();
+        let pull_store = self.ctx().database.pulls();
+        let review_store = self.ctx().database.reviews();
+        let (pulls, reviews) = tokio::try_join!(pull_store.find_among(repo.repo.repo.id, &ids), review_store.submitted_among(&ids))?;
+        let pulls: HashMap<_, _> = pulls.into_iter().map(|pull| (pull.issue_id, pull)).collect();
+        let mut items = Vec::with_capacity(ids.len());
+        for issue in &results.issues {
+            let Some(pull) = pulls.get(&issue.id) else { continue };
+            let (approvals, changes_requested) =
+                list_badges(reviews.get(&issue.id).map_or(&[][..], Vec::as_slice), issue.author, &pull.head_sha);
+            items.push(PullListItem {
+                author: issue.author.and_then(|id| results.authors.get(&id).cloned()),
+                approvals,
+                changes_requested,
+                issue: issue.clone(),
+                pull: pull.clone(),
+            });
+        }
+        Ok(items)
+    }
+
+    /// The tip of the base branch, or `None` when it no longer exists.
+    pub async fn base_tip(&self, ctx: &PullContext) -> Result<Option<String>, ServiceError> {
+        Ok(ctx.repo().reader.commit_id(format!("refs/heads/{}", ctx.pull.base_branch)).await.ok())
+    }
+
+    /// The ids this pull request compares: `(base, head)`. Merged pull requests keep
+    /// showing what was merged; open ones compare the base branch's tip with the head.
+    pub async fn compared_ids(&self, ctx: &PullContext) -> Result<(String, String), ServiceError> {
+        if let (Some(base), Some(head)) = (&ctx.pull.merged_base_sha, &ctx.pull.merged_head_sha) {
+            return Ok((base.clone(), head.clone()));
+        }
+        let base = self.base_tip(ctx).await?.ok_or(ServiceError::NotFound)?;
+        Ok((base, ctx.pull.head_sha.clone()))
+    }
+
+    /// The comparison behind the Commits and Files changed tabs: from the merge base to
+    /// the head, inside the base repository (`refs/pull/{n}/head` holds the head). Commits
+    /// behind the base are not counted (`behind` is 0).
+    ///
+    /// With the default limits the counts are remembered (see [`Self::cached_counts`]), so
+    /// the other tabs and the pull request JSON can show them without diffing.
+    pub async fn changes(&self, ctx: &PullContext, limits: DiffLimits) -> Result<Comparison, ServiceError> {
+        let (base, head) = self.compared_ids(ctx).await?;
+        let max_commits = self.ctx().config.pulls.max_commits;
+        let comparison = ctx.repo().reader.compare_ahead(base.clone(), head.clone(), limits, max_commits).await?;
+        if limits == DiffLimits::default() {
+            remember_new_comparison(self.ctx(), &comparison).await;
+        }
+        Ok(comparison)
+    }
+
+    /// The header counts of comparing `head` against `base` (full commit ids) when a
+    /// Files changed tab or [`Self::counts_between`] computed them before. Cache failures
+    /// are logged and read as a miss.
+    ///
+    /// The cache is shared by every repository: pass only ids the caller already knows
+    /// the viewer may see (those of [`Self::compared_ids`]), never ids from a request.
+    pub async fn cached_counts(&self, base: &str, head: &str) -> Option<PullCounts> {
+        cached_comparison(self.ctx(), base, head).await.map(|counts| PullCounts {
+            ahead: usize::try_from(counts.ahead).unwrap_or(usize::MAX),
+            files: usize::try_from(counts.files).unwrap_or(usize::MAX),
+        })
+    }
+
+    /// The header counts of comparing `head` against `base` (commit ids) in `ctx`'s
+    /// base repository: cached, or computed with the default diff limits and remembered.
+    ///
+    /// Only the pair this pull request compares ([`Self::compared_ids`]) is answered;
+    /// any other pair is [`ServiceError::NotFound`]. The ids come from a URL, and the
+    /// cache is shared by every repository: without the check a viewer of one pull
+    /// request could read (or confirm) the counts of commits in a repository they cannot
+    /// see, or make the server diff arbitrary pairs. Within that check an id-only key is
+    /// sound: a pair of commit ids compares the same way wherever both exist.
+    pub async fn counts_between(&self, ctx: &PullContext, base: &str, head: &str) -> Result<PullCounts, ServiceError> {
+        let (compared_base, compared_head) = self.compared_ids(ctx).await?;
+        if base != compared_base || head != compared_head {
+            return Err(ServiceError::NotFound);
+        }
+        if let Some(counts) = self.cached_counts(base, head).await {
+            return Ok(counts);
+        }
+        let comparison = ctx.repo().reader.compare_ahead(base.to_owned(), head.to_owned(), DiffLimits::default(), 0).await?;
+        // Keyed by the ids the comparison resolved, so a short id never fills the cache.
+        remember_comparison(self.ctx(), &comparison).await;
+        Ok(PullCounts::of(&comparison))
+    }
+
+    /// The commits of the pull request, newest first (at most `[pulls] max_commits`).
+    pub async fn commits(&self, ctx: &PullContext) -> Result<Vec<CommitSummary>, ServiceError> {
+        Ok(self.changes(ctx, DiffLimits { max_files: 0, ..DiffLimits::default() }).await?.commits)
+    }
+
+    /// Whether the head branch still exists in the head repository.
+    pub async fn head_branch_exists(&self, ctx: &PullContext) -> bool {
+        let Some(head) = &ctx.head_repo else { return false };
+        let reader = self.ctx().repositories.reader(head.repo.owner_id, head.repo.id);
+        reader.commit_id(format!("refs/heads/{}", ctx.pull.head_branch)).await.is_ok()
+    }
+
+    // ------------------------------------------------------------- drafts and base
+
+    /// Marks the pull request draft or ready for review (author or writers).
+    pub async fn set_draft(&self, actor: &User, ctx: &PullContext, draft: bool) -> Result<(), ServiceError> {
+        if !may_edit_pull(ctx.issue().is_author(actor), ctx.repo().access.can_write()) || !ctx.repo().access.can_read() {
+            return Err(ServiceError::Forbidden);
+        }
+        ctx.repo().ensure_writable()?;
+        if !ctx.issue().is_open() {
+            return Err(ServiceError::Invalid(CLOSED.to_owned()));
+        }
+        if self.ctx().database.pulls().set_draft(ctx.issue().id, draft, Timestamp::now()).await? {
+            let (event, action) = if draft {
+                (rbit_core::TimelineEvent::ConvertedToDraft, IssueAction::ConvertedToDraft)
+            } else {
+                (rbit_core::TimelineEvent::ReadyForReview, IssueAction::ReadyForReview)
+            };
+            self.inner.timeline.writer().record(ctx.issue().id, Some(actor.id()), event).await?;
+            self.publish(ctx.issue(), Some(actor.id()), action);
+            if !draft {
+                let mut pull = ctx.pull.clone();
+                pull.is_draft = false;
+                self.route_code_owners(ctx.repo(), ctx.issue(), &pull).await;
+            }
+            self.inner.wake.notify_one();
+        }
+        Ok(())
+    }
+
+    /// Points the pull request at another existing branch of the base repository (author
+    /// or writers). Approvals given so far are dismissed: they were for the old base.
+    pub async fn set_base(&self, actor: &User, ctx: &PullContext, branch: &str) -> Result<(), ServiceError> {
+        if !may_edit_pull(ctx.issue().is_author(actor), ctx.repo().access.can_write()) {
+            return Err(ServiceError::Forbidden);
+        }
+        ctx.repo().ensure_writable()?;
+        let facts = BaseChangeFacts {
+            is_open: ctx.issue().is_open(),
+            is_merged: ctx.pull.is_merged(),
+            cross_repository: ctx.pull.is_cross_repository(),
+            head_branch: &ctx.pull.head_branch,
+            base_branch: &ctx.pull.base_branch,
+        };
+        let exists = |full: String| async move { ctx.repo().reader.commit_id(full).await.is_ok() };
+        let plan = plan_base_change(facts, branch, exists).await.map_err(|refusal| ServiceError::Invalid(refusal.to_owned()))?;
+        let BaseChange::To { branch, message } = plan else { return Ok(()) };
+        let branch = branch.as_str();
+        let previous = ctx.pull.base_branch.clone();
+        self.spend(actor)?;
+        // Approvals were given for the old base: dismiss them with the change.
+        let changed = self.ctx().database.pulls().set_base(ctx.issue().id, branch, actor.id(), &message, Timestamp::now()).await?;
+        if let Some(dismissed) = changed {
+            let mut pull = ctx.pull.clone();
+            pull.base_branch = branch.to_owned();
+            self.route_code_owners(ctx.repo(), ctx.issue(), &pull).await;
+            let event = rbit_core::TimelineEvent::BaseChanged { from: previous.clone(), to: branch.to_owned() };
+            self.inner.timeline.writer().record(ctx.issue().id, Some(actor.id()), event).await?;
+            for (review, reviewer) in dismissed {
+                let event = rbit_core::TimelineEvent::ReviewDismissed { review, reviewer };
+                self.inner.timeline.writer().record(ctx.issue().id, Some(actor.id()), event).await?;
+                self.publish_review(ctx, review, actor.id(), rbit_core::issue::ReviewAction::Dismissed);
+            }
+            self.publish(
+                ctx.issue(),
+                Some(actor.id()),
+                IssueAction::Edited { previous_title: None, previous_body: None, previous_base: Some(previous.clone()) },
+            );
+            self.inner.wake.notify_one();
+            // A queued pull request belongs in another line now: its old line looks at once.
+            if self.ctx().database.actions_runs().queue_of_pull(ctx.issue().id).await?.is_some() {
+                self.nudge(ctx.repo().repo.repo.id, previous);
+            }
+        }
+        Ok(())
+    }
+
+    // ------------------------------------------------------------- JSON
+
+    /// The `pull_request` object of `ctx`, as the API returns it.
+    pub async fn json(&self, ctx: &PullContext, base_url: &str) -> Result<serde_json::Value, ServiceError> {
+        json::load(self.ctx(), ctx.issue(), &ctx.pull, base_url).await
+    }
+
+    /// Whether the pull request was merged into the repository's default branch.
+    pub async fn merged_into_default_branch(&self, pull: rbit_core::IssueId) -> Result<bool, ServiceError> {
+        lifecycle::merged_into_default_branch(self.ctx(), pull).await
+    }
+
+    /// The `pull_request` object of a listed pull request.
+    pub async fn json_of(&self, issue: &Issue, pull: &PullRequest, base_url: &str) -> Result<serde_json::Value, ServiceError> {
+        json::load(self.ctx(), issue, pull, base_url).await
+    }
+
+    /// The webhook payload [`hooks::payload`] builds for `event`, even when no hook
+    /// subscribes to it (for tools and tests).
+    pub async fn payload(&self, event: &DomainEvent, base_url: &str) -> Result<Option<crate::webhooks::HookPayload>, ServiceError> {
+        hooks::build(self.ctx(), event, base_url).await
+    }
+
+    // ------------------------------------------------------------- helpers
+
+    fn spend(&self, actor: &User) -> Result<(), ServiceError> {
+        self.inner.throttle.check(ThrottleScope::Content, &actor.id().0.to_string())
+    }
+
+    fn publish(&self, issue: &Issue, actor: Option<AccountId>, action: IssueAction) {
+        self.ctx().events.publish(DomainEvent::Issue {
+            repo: issue.repo_id,
+            issue: issue.id,
+            number: issue.number,
+            kind: issue.kind,
+            actor,
+            action,
+        });
+    }
+
+    /// `account`'s access to `repo` (token scopes do not apply: this is about the
+    /// account, e.g. whether a reviewer is a writer).
+    async fn access_of(&self, account: AccountId, repo: &OwnedRepository) -> Result<RepoAccess, ServiceError> {
+        let Some(user) = self.ctx().database.accounts().find_user(account).await? else { return Ok(RepoAccess::None) };
+        let grants = viewer_grants(&self.ctx().database.repositories(), Some(&user), repo).await?;
+        Ok(repo_access(Some(&user), repo, &grants))
+    }
+}
+
+/// Whether the `PoisonError`-tolerant lock map hands out the same lock for a repository.
+fn merge_lock(locks: &Mutex<HashMap<RepoId, Arc<tokio::sync::Mutex<()>>>>, repo: RepoId) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = locks.lock().unwrap_or_else(PoisonError::into_inner);
+    locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+    Arc::clone(locks.entry(repo).or_default())
+}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+<h1 class="text-lg font-semibold">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearch.text(page.locale)) %}{% endcall %}</h1>
+<p class="my-3 text-sm text-ink-muted">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearchHelp.text(page.locale)) %}{% endcall %}</p>
+<form method="get" action="{{ header.home_url }}/search" class="box grid gap-3 p-4 sm:grid-cols-2">
+<label class="block min-w-0 text-sm">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearchText.text(page.locale)) %}{% endcall %}<input class="input mt-1 w-full" name="q" value="{{ query.q }}" maxlength="256" required></label>
+<label class="block min-w-0 text-sm">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearchPath.text(page.locale)) %}{% endcall %}<input class="input mt-1 w-full" name="path" value="{{ query.path }}" maxlength="1024"></label>
+<label class="block min-w-0 text-sm">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearchLanguage.text(page.locale)) %}{% endcall %}<input class="input mt-1 w-full" name="language" value="{{ query.language }}" maxlength="64"></label>
+<div class="flex items-end"><button class="btn btn-primary" type="submit">{% call ui::localized(rbit_localization::RepoBrowseLabel::Search.text(page.locale)) %}{% endcall %}</button></div>
+</form>
+{% if truncated %}<p class="my-3 text-sm" role="status">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearchLimited.text(page.locale)) %}{% endcall %}</p>{% endif %}
+{% if skipped > 0 %}<p class="my-3 text-sm text-ink-muted">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearchSkipped.text(page.locale)) %}{% endcall %} {{ skipped }}</p>{% endif %}
+{% if !commit.is_empty() %}<p class="my-3 break-all font-mono text-xs text-ink-muted" dir="ltr">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearchCommit.text(page.locale)) %}{% endcall %} {{ commit }}</p>{% endif %}
+{% if !query.q.is_empty() && matches.is_empty() %}<p class="my-4 text-sm">{% call ui::localized(rbit_localization::RepoBrowseLabel::CodeSearchEmpty.text(page.locale)) %}{% endcall %}</p>{% endif %}
+<ul class="mt-4 space-y-3">
+{% for found in matches %}<li class="box min-w-0 overflow-hidden p-3"><a href="{{ found.url }}" class="break-all font-mono text-sm hover:underline" dir="ltr">{{ found.path }}:{{ found.line }}</a><pre class="mt-2 overflow-x-auto text-xs" dir="ltr"><code>{{ found.snippet }}</code></pre></li>{% endfor %}
+</ul>
+{% endblock %}

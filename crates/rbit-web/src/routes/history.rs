@@ -1,0 +1,182 @@
+//! A single commit with its diff, and the branch and tag listings.
+
+use crate::views::pagination::{LIST_PAGE_SIZE, ListQuery, Pagination};
+use axum::extract::{Path, Query, State};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use rbit_git::{DiffLimits, RefKind, RefSummary};
+use rbit_localization::RepoNavLabel;
+use rbit_services::ServiceError;
+use sha2::{Digest, Sha256};
+
+use super::repo::RepoPage;
+use crate::{
+    AppState,
+    error::WebResult,
+    extract::Viewer,
+    views::{
+        branch_graph::BranchGraph,
+        commit::CommitPage,
+        layout::Page,
+        refs::{RefRow, RefsPage},
+    },
+};
+
+/// `GET /{owner}/{repo}/commit/{revision}`
+pub async fn commit(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    page: Page,
+    Path((owner, repo, revision)): Path<(String, String, String)>,
+) -> WebResult<CommitPage> {
+    let loaded = RepoPage::load(&state, &viewer, &owner, &repo).await?;
+    // The revision is resolved first, so the diff and the statuses (Milestone 3, S) can be
+    // read at the same time, both for the commit it names. Even a full-length id is
+    // resolved: it may be an annotated tag's object, or a branch named with hex digits.
+    let id = loaded.ctx.reader.commit_id(revision).await.map_err(ServiceError::from)?;
+    let (detail, combined) = tokio::join!(
+        loaded.ctx.reader.commit_detail(id.clone(), DiffLimits::default()),
+        state.services.statuses.combined_for(&loaded.ctx, &id),
+    );
+    // The diff's error wins: an unknown commit is 404 whatever the statuses say.
+    let detail = detail.map_err(ServiceError::from)?;
+    let combined = combined?;
+
+    let title = format!("{} · {}", detail.commit.summary, loaded.ctx.repo.full_name());
+    Ok(CommitPage::new(page.titled(title), loaded.header(&state, "commits"), &detail, &loaded.urls).with_statuses(&combined))
+}
+
+/// Whether `revision` has the shape of a full commit id (SHA-1 or SHA-256, lowercase hex).
+/// Shape only: a branch or tag may have such a name (Git resolves it as a reference when
+/// no object has that id), so whether a URL pins its answer is decided by comparing the
+/// commit it resolved to with the URL's id.
+pub(super) fn is_full_commit_id(revision: &str) -> bool {
+    matches!(revision.len(), 40 | 64) && revision.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+pub struct RefsQuery {
+    q: String,
+    page: usize,
+    view: Option<String>,
+    after: Option<String>,
+}
+
+/// `GET /{owner}/{repo}/branches`
+pub async fn branches(
+    state: State<AppState>,
+    viewer: Viewer,
+    page: Page,
+    Path((owner, repo)): Path<(String, String)>,
+    Query(query): Query<RefsQuery>,
+) -> WebResult<RefsPage> {
+    let listing = ListQuery { q: query.q, page: query.page }.normalized();
+    if query.view.as_deref() == Some("tree") {
+        let loaded = RepoPage::load(&state, &viewer, &owner, &repo).await?;
+        let references = loaded.ctx.reader.branch_tips().await.map_err(ServiceError::from)?;
+        let tips = references.iter().map(|reference| reference.target.clone()).collect();
+        let graph = graph_page(&loaded, &references, tips, &loaded.urls.branches(), query.after.as_deref()).await?;
+        return Ok(RefsPage {
+            pagination: Pagination::new(references.len(), &listing, loaded.urls.branches(), vec![]),
+            page: crate::views::repo_text::titled(page, RepoNavLabel::Branches, &loaded.ctx.repo.full_name()),
+            header: loaded.header(&state, "branches"),
+            kind: "branch",
+            rows: Vec::new(),
+            graph: Some(graph),
+        });
+    }
+    refs(state, viewer, page, Path((owner, repo)), RefKind::Branch, listing).await
+}
+
+/// `GET /{owner}/{repo}/tags`
+pub async fn tags(
+    state: State<AppState>,
+    viewer: Viewer,
+    page: Page,
+    path: Path<(String, String)>,
+    Query(query): Query<ListQuery>,
+) -> WebResult<RefsPage> {
+    refs(state, viewer, page, path, RefKind::Tag, query.normalized()).await
+}
+
+async fn refs(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    page: Page,
+    Path((owner, repo)): Path<(String, String)>,
+    kind: RefKind,
+    query: ListQuery,
+) -> WebResult<RefsPage> {
+    let loaded = RepoPage::load(&state, &viewer, &owner, &repo).await?;
+    let (details, total) = loaded
+        .ctx
+        .reader
+        .ref_details_page(kind, query.q.clone(), loaded.default_branch().into(), query.page, LIST_PAGE_SIZE)
+        .await
+        .map_err(ServiceError::from)?;
+
+    let mut rows: Vec<RefRow> = details.iter().map(|d| RefRow::new(d, loaded.default_branch(), &loaded.urls)).collect();
+    // The default branch leads the list; the rest stay most-recent-first.
+    rows.sort_by_key(|row| !row.is_default);
+
+    let (label, tab, kind_name) = match kind {
+        RefKind::Branch => (RepoNavLabel::Branches, "branches", "branch"),
+        RefKind::Tag => (RepoNavLabel::Tags, "tags", "tag"),
+    };
+    // Only branches carry the "Protected" badge.
+    let protected = match kind {
+        RefKind::Branch => {
+            state
+                .services
+                .protection
+                .protected_branch_names(&loaded.ctx, &rows.iter().map(|row| row.name.clone()).collect::<Vec<_>>())
+                .await?
+        }
+        RefKind::Tag => Vec::new(),
+    };
+    Ok(RefsPage {
+        graph: None,
+        pagination: Pagination::new(total, &query, format!("{}/{tab}", loaded.urls.home()), vec![]),
+        page: crate::views::repo_text::titled(page, label, &loaded.ctx.repo.full_name()),
+        header: loaded.header(&state, tab),
+        kind: kind_name,
+        rows,
+    }
+    .with_protected(&protected))
+}
+
+/// The cursor belongs to the exact set of refs used to lay out the previous page.
+/// If they have moved, start again so two different walks cannot be joined.
+pub(super) async fn graph_page(
+    loaded: &RepoPage,
+    references: &[RefSummary],
+    tips: Vec<String>,
+    base: &str,
+    after: Option<&str>,
+) -> WebResult<BranchGraph> {
+    const GRAPH_PAGE_SIZE: usize = 200;
+    let mut hash = Sha256::new();
+    for tip in &tips {
+        hash.update(tip.as_bytes());
+        hash.update([0]);
+    }
+    hash.update([0]);
+    for reference in references {
+        hash.update(reference.name.as_bytes());
+        hash.update([0]);
+        hash.update(reference.target.as_bytes());
+        hash.update([0]);
+    }
+    let snapshot = URL_SAFE_NO_PAD.encode(hash.finalize());
+    let offset = after
+        .and_then(|cursor| cursor.split_once('-'))
+        .filter(|(_, previous)| *previous == snapshot)
+        .and_then(|(offset, _)| offset.parse().ok())
+        .unwrap_or(0);
+    let history = loaded.ctx.reader.branch_history(tips, offset, GRAPH_PAGE_SIZE).await.map_err(ServiceError::from)?;
+    let mut graph = BranchGraph::new(&history, references, &loaded.urls);
+    graph.start_url = format!("{base}?view=tree");
+    graph.next_url = history.has_more.then(|| format!("{}&after={}-{}", graph.start_url, offset + history.commits.len(), snapshot));
+    graph.snapshot = snapshot;
+    Ok(graph)
+}

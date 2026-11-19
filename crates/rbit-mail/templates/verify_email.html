@@ -1,0 +1,11 @@
+{% extends "layout.html" %}
+{% import "parts.html" as mail %}
+{% block title %}Confirm your email address{% endblock %}
+{% block body %}
+{% call mail::heading("Confirm your email address") %}{% endcall %}
+<p style="margin:0 0 12px">Hi {{ m.username }},</p>
+<p style="margin:0">{{ m.introduction() }}</p>
+{% call mail::button(m.link, "Confirm email address") %}{% endcall %}
+{% call mail::fallback_link(m.link) %}{% endcall %}
+<p style="margin:0;color:#666666">The link expires in {{ m.valid_for }}. If you didn't create an account or change your address, you can ignore this email.</p>
+{% endblock %}

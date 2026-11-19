@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+<div class="grid gap-6 md:grid-cols-[13rem_minmax(0,1fr)] md:gap-8">
+  <aside class="min-w-0 md:sticky md:top-6 md:self-start">
+    {% include "repo/settings_nav.html" %}
+  </aside>
+  <div class="min-w-0">{% block settings_content %}{% endblock %}</div>
+</div>
+{% endblock %}

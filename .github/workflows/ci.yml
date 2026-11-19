@@ -1,0 +1,566 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request supersedes its running checks. Runs on `main` are
+# never cancelled, so every commit that lands there gets a complete result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The Rust every CI job builds with: a new stable release changes rustfmt and Cargo's
+  # build layout, so it is adopted in its own change, never by surprise.
+  RUST_TOOLCHAIN: "1.99.1"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "1"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  NODE_VERSION: "24"
+
+jobs:
+  rewrite-contracts:
+    name: Rewrite contracts (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Windows runners (4 cores, 16 GB, no swap needed) compile four units at once: a full
+    # workspace test build peaks near 12 GB of compiler memory and takes a third of the
+    # time it takes one unit at a time. Linux keeps the workflow-wide single job.
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.os == 'windows-latest' && '4' || '1' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # A pinned toolchain is installed without the hosted image's clippy.
+          components: clippy
+      # Bootstrap registry sources before guarded compilation's offline metadata scan.
+      - run: node scripts/workspace.mjs fetch --locked
+      - run: node --test scripts/tests/rewrite-*.test.mjs scripts/tests/identity-features.test.mjs scripts/tests/platform-boundary.test.mjs scripts/tests/workspace*.test.mjs
+      - run: node scripts/rewrite/check.mjs
+      # Separate invocations prevent workspace feature unification from hiding a
+      # missing model-only or credentials-only dependency/compile contract.
+      # Feature contracts of crates with no OS-specific code or dependencies run on
+      # Linux only: Windows would repeat the same resolution, and Tests (windows-latest)
+      # still builds and tests every workspace crate there. scripts/tests/
+      # rewrite-ci-contract-platforms.test.mjs fails if one of them gains OS-specific code.
+      - run: node scripts/workspace.mjs test --package rbit-identity --no-default-features --locked
+        if: runner.os == 'Linux'
+      - run: node scripts/workspace.mjs test --package rbit-identity-models --no-default-features --locked
+        if: runner.os == 'Linux'
+      - run: node scripts/workspace.mjs test --package rbit-identity --no-default-features --features credentials --locked
+        if: runner.os == 'Linux'
+      # The workspace test union enables identity password-work; compile this tool
+      # separately so an accidental application-only import cannot be hidden by it.
+      - run: node scripts/workspace.mjs test --package rbit-credential-inventory --no-default-features --locked
+      - run: node scripts/workspace.mjs test --package rbit-identity --no-default-features --features session-tokens --locked
+        if: runner.os == 'Linux'
+      - run: node scripts/workspace.mjs test --package rbit-identity --no-default-features --features sessions --locked
+        if: runner.os == 'Linux'
+      - run: node scripts/workspace.mjs test --package rbit-collaboration --no-default-features --locked
+        if: runner.os == 'Linux'
+      - run: node scripts/workspace.mjs test --package rbit-collaboration --no-default-features --features applications --locked
+        if: runner.os == 'Linux'
+      - run: node scripts/workspace.mjs test --package rbit-contracts --package rbit-core --package rbit-repositories --package rbit-kernel --package rbit-localization --package rbit-identity-models --package rbit-identity --package rbit-collaboration --package rbit-auth --package rbit-rewrite-check --features rbit-identity/password-work,rbit-identity/sessions,rbit-collaboration/applications --locked
+        if: runner.os == 'Linux'
+      - run: node scripts/workspace.mjs test --package rbit-render-probe --no-default-features --features inheritance,segments,blocks,count-8 --locked
+        if: runner.os == 'Linux'
+      # rbit-rewrite-check (in the union above) has Windows-only filesystem code, so it
+      # is tested on Windows as well.
+      - run: node scripts/workspace.mjs test --package rbit-rewrite-check --locked
+        if: runner.os == 'Windows'
+      # rbit-platform's native namespace boundary is Windows-only code that the Linux lint
+      # job never compiles, so it is linted strictly on both matrix platforms here.
+      - run: node scripts/workspace.mjs clippy --package rbit-platform --all-targets --locked -- -D warnings
+      - run: node scripts/rewrite/check-types.mjs
+
+  lint:
+    name: Format and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ". -> .cargo-build"
+          # PR saves stay in their merge-ref scope; main cannot restore them.
+          # Save dependency outputs only; keep local workspace units and tools out.
+          cache-workspace-crates: false
+          cache-all-crates: false
+          cache-bin: false
+          cache-on-failure: false
+          save-if: >-
+            ${{ (github.event_name == 'pull_request' && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge')) ||
+                (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+      - run: cargo fmt --all --check
+      # Pedantic lints are enabled workspace-wide in Cargo.toml; warnings fail the build.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  deny:
+    name: Licenses and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # A prebuilt cargo-deny binary: compiling it would take longer than the check.
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: cargo-deny
+      # deny.toml lists the allowed licenses and the ignored advisories (each with a reason).
+      # Advisories come from the RustSec database, so a new advisory can fail an unchanged
+      # commit: that is the point.
+      - run: cargo deny --locked check licenses advisories
+
+  # Workspace tests, per platform: Linux is the supported server platform; Windows keeps
+  # local development honest. Each platform compiles once into a nextest archive, runs
+  # the tests from it in parallel shards, and runs the doc tests (and on Linux the
+  # server build and upgrade rehearsal) alongside. `Tests (<os>)` requires all of them.
+  # A re-run of a failed shard runs only the tests that failed: docs/ci-test-shards.md.
+  tests-linux-build:
+    name: Test build (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # This job only compiles, so it succeeds (and saves) even when a test fails later.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ". -> .cargo-build"
+          cache-workspace-crates: false
+          cache-all-crates: false
+          cache-bin: false
+          cache-on-failure: false
+          save-if: >-
+            ${{ (github.event_name == 'pull_request' && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge')) ||
+                (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+      # Asset tests need the generated (gitignored) stylesheets. Debug builds read them
+      # from disk, so they travel with the archive to the shards.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci && npm run build
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest archive --workspace --locked --archive-file target/nextest-archive.tar.zst
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nextest-archive-ubuntu-latest
+          path: |
+            target/nextest-archive.tar.zst
+            crates/rbit-web/assets/app.css
+            crates/rbit-web/assets/deferred.css
+          if-no-files-found: error
+          # Already zstd-compressed. Re-running a shard needs this archive: past its
+          # retention, use "Re-run all jobs" instead.
+          compression-level: 0
+          retention-days: 3
+          # "Re-run all jobs" builds again and replaces the archive of the earlier attempt.
+          overwrite: true
+
+  tests-linux-shards:
+    name: Tests (ubuntu-latest, ${{ matrix.shard }}/${{ matrix.total }})
+    needs: tests-linux-build
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux runs the suite in about three minutes; two shards keep setup overhead low.
+        shard: [1, 2]
+        total: [2]
+    runs-on: ubuntu-latest
+    env:
+      TEST_OS: ubuntu-latest
+      TEST_SHARD: ${{ matrix.shard }}/${{ matrix.total }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build
+      # The e2e tests ask cargo for the build's layout, and toolchain paths are compiled in.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # Integration tests drive the real git CLI (pushes, gc, backups); the hosted runners
+      # ship git, so only print its version for the log.
+      - run: git --version
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: cargo-nextest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: nextest-archive-ubuntu-latest
+      # On a re-run, the failed-test lists that earlier attempts of this shard uploaded.
+      # A pattern that matches nothing downloads nothing; the shard then runs in full.
+      - if: ${{ github.run_attempt != '1' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: nextest-failed-ubuntu-latest-shard-${{ matrix.shard }}-of-${{ matrix.total }}-attempt-*
+          path: ${{ runner.temp }}/previous-failures
+          merge-multiple: true
+      - name: Install signature verification fixtures
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg openssh-client
+      - id: tests
+        run: node scripts/ci/nextest-shard.mjs run
+        env:
+          NEXTEST_ARCHIVE: target/nextest-archive.tar.zst
+          PREVIOUS_FAILURES: ${{ runner.temp }}/previous-failures
+          SHARD_STATUS: ${{ runner.temp }}/shard-status.json
+          # The archive keeps test binaries in target/, not in the configured build dir.
+          CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/target
+      - if: ${{ always() }}
+        run: node scripts/ci/nextest-shard.mjs record
+        env:
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          SHARD_STATUS: ${{ runner.temp }}/shard-status.json
+          FAILURES_OUTPUT: ${{ runner.temp }}/failed-tests/failed-ubuntu-latest-${{ matrix.shard }}-of-${{ matrix.total }}-attempt-${{ github.run_attempt }}.json
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nextest-failed-ubuntu-latest-shard-${{ matrix.shard }}-of-${{ matrix.total }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/failed-tests/
+          if-no-files-found: warn
+          retention-days: 3
+
+  tests-linux-extras:
+    name: Doc tests and rehearsal (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ". -> .cargo-build"
+          cache-workspace-crates: false
+          cache-all-crates: false
+          cache-bin: false
+          cache-on-failure: false
+          save-if: >-
+            ${{ (github.event_name == 'pull_request' && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge')) ||
+                (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+      - run: git --version
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci && npm run build
+      # nextest does not execute doctests, so Rust documentation examples run here.
+      - run: cargo test --workspace --doc --locked
+      # Upgrade rehearsal (fast mode): the candidate upgrades a store at the previous
+      # release's schema, serves, backs up and restores it, refuses a newer database and
+      # survives migrations killed part-way. See docs/upgrade-rehearsal.md.
+      - run: cargo build --locked --package rbit-server
+      - run: node --test scripts/tests/release-rehearsal.test.mjs
+        env:
+          RBIT_REHEARSAL_CANDIDATE: target/debug/rbit
+
+  tests-linux:
+    # Required check: passes only when the build, every shard and the extra checks passed.
+    name: Tests (ubuntu-latest)
+    if: ${{ always() }}
+    needs: [tests-linux-build, tests-linux-shards, tests-linux-extras]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the build, every shard and the extra checks
+        env:
+          BUILD: ${{ needs.tests-linux-build.result }}
+          SHARDS: ${{ needs.tests-linux-shards.result }}
+          EXTRAS: ${{ needs.tests-linux-extras.result }}
+        run: |
+          echo "Test build: $BUILD; test shards: $SHARDS; doc tests and rehearsal: $EXTRAS"
+          [ "$BUILD" = success ] && [ "$SHARDS" = success ] && [ "$EXTRAS" = success ]
+
+  tests-windows-build:
+    name: Test build (windows-latest)
+    runs-on: windows-latest
+    # See rewrite-contracts: four compile jobs on Windows runners.
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ". -> .cargo-build"
+          cache-workspace-crates: false
+          cache-all-crates: false
+          cache-bin: false
+          cache-on-failure: false
+          save-if: >-
+            ${{ (github.event_name == 'pull_request' && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge')) ||
+                (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci && npm run build
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest archive --workspace --locked --archive-file target/nextest-archive.tar.zst
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nextest-archive-windows-latest
+          path: |
+            target/nextest-archive.tar.zst
+            crates/rbit-web/assets/app.css
+            crates/rbit-web/assets/deferred.css
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+          overwrite: true
+
+  tests-windows-shards:
+    name: Tests (windows-latest, ${{ matrix.shard }}/${{ matrix.total }})
+    needs: tests-windows-build
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows runs the suite in about fifteen minutes on one runner.
+        shard: [1, 2, 3, 4]
+        total: [4]
+    runs-on: windows-latest
+    env:
+      TEST_OS: windows-latest
+      TEST_SHARD: ${{ matrix.shard }}/${{ matrix.total }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - run: git --version
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: cargo-nextest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: nextest-archive-windows-latest
+      - if: ${{ github.run_attempt != '1' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: nextest-failed-windows-latest-shard-${{ matrix.shard }}-of-${{ matrix.total }}-attempt-*
+          path: ${{ runner.temp }}/previous-failures
+          merge-multiple: true
+      - id: tests
+        run: node scripts/ci/nextest-shard.mjs run
+        env:
+          NEXTEST_ARCHIVE: target/nextest-archive.tar.zst
+          PREVIOUS_FAILURES: ${{ runner.temp }}/previous-failures
+          SHARD_STATUS: ${{ runner.temp }}/shard-status.json
+          CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/target
+      - if: ${{ always() }}
+        run: node scripts/ci/nextest-shard.mjs record
+        env:
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          SHARD_STATUS: ${{ runner.temp }}/shard-status.json
+          FAILURES_OUTPUT: ${{ runner.temp }}/failed-tests/failed-windows-latest-${{ matrix.shard }}-of-${{ matrix.total }}-attempt-${{ github.run_attempt }}.json
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nextest-failed-windows-latest-shard-${{ matrix.shard }}-of-${{ matrix.total }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/failed-tests/
+          if-no-files-found: warn
+          retention-days: 3
+
+  tests-windows-extras:
+    name: Doc tests (windows-latest)
+    runs-on: windows-latest
+    # See rewrite-contracts: four compile jobs on Windows runners.
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ". -> .cargo-build"
+          cache-workspace-crates: false
+          cache-all-crates: false
+          cache-bin: false
+          cache-on-failure: false
+          save-if: >-
+            ${{ (github.event_name == 'pull_request' && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge')) ||
+                (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci && npm run build
+      - run: cargo test --workspace --doc --locked
+
+  tests-windows:
+    name: Tests (windows-latest)
+    if: ${{ always() }}
+    needs: [tests-windows-build, tests-windows-shards, tests-windows-extras]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the build, every shard and the doc tests
+        env:
+          BUILD: ${{ needs.tests-windows-build.result }}
+          SHARDS: ${{ needs.tests-windows-shards.result }}
+          EXTRAS: ${{ needs.tests-windows-extras.result }}
+        run: |
+          echo "Test build: $BUILD; test shards: $SHARDS; doc tests: $EXTRAS"
+          [ "$BUILD" = success ] && [ "$SHARDS" = success ] && [ "$EXTRAS" = success ]
+
+  assets:
+    name: Front-end build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      # Vendored scripts and generated icons are committed; the build must not change them.
+      - run: git diff --exit-code -- crates/rbit-web/assets
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: app-css
+          path: |
+            crates/rbit-web/assets/app.css
+            crates/rbit-web/assets/deferred.css
+          retention-days: 1
+
+  release:
+    name: Release build
+    needs: assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: app-css
+          path: crates/rbit-web/assets
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ". -> .cargo-build"
+          key: release
+          cache-workspace-crates: false
+          cache-all-crates: false
+          cache-bin: false
+          cache-on-failure: false
+          save-if: >-
+            ${{ (github.event_name == 'pull_request' && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge')) ||
+                (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+      # rbit-runner is not a default member: name both, as the release does.
+      - run: cargo build --release --locked --package rbit-server --package rbit-runner
+      - run: ./target/release/rbit --version
+      - run: ./target/release/rbit-runner --version
+      # The release artifact itself runs the upgrade rehearsal (fast mode).
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: node scripts/release-rehearsal.mjs --candidate target/release/rbit
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rbit-linux-x86_64
+          path: |
+            target/release/rbit
+            target/release/rbit-runner
+          retention-days: 7
+
+  runner-image:
+    name: Runner image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # The image the release publishes, compiled from source: its packages must install
+      # and the runner must start inside it.
+      - run: docker build --file Dockerfile.runner --tag rbit-runner:ci .
+      - run: docker run --rm rbit-runner:ci --version
+      - run: docker run --rm --entrypoint git rbit-runner:ci --version
+      - run: docker run --rm --entrypoint docker rbit-runner:ci --version
+
+  required:
+    # Keep this display name stable for branch protection. Every required validation
+    # is listed directly, including ancestors, so no skip hides failure. Candidate
+    # image review remains a separate optional check until its acceptance gate passes.
+    name: CI required
+    if: ${{ always() }}
+    needs: [rewrite-contracts, lint, deny, tests-linux-build, tests-linux-shards, tests-linux-extras, tests-linux, tests-windows-build, tests-windows-shards, tests-windows-extras, tests-windows, assets, release, runner-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Summarize and require every validation
+        run: node scripts/ci/required-check.mjs
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}

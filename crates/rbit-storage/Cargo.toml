@@ -1,0 +1,55 @@
+[package]
+name = "rbit-storage"
+description = "Persistence for rbit: SQLite for relational data, redb for sessions and caches."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# One integration-test binary (tests/main.rs) instead of one per file.
+autotests = false
+
+[dependencies]
+rbit-notifications.workspace = true
+rbit-access = { workspace = true, default-features = false }
+rbit-wikis = { workspace = true, default-features = false }
+rbit-collaboration = { workspace = true, default-features = false, features = ["applications"] }
+rbit-identity-models.workspace = true
+rbit-repositories.workspace = true
+rbit-core.workspace = true
+sqlx.workspace = true
+redb.workspace = true
+serde.workspace = true
+# T0: timeline events are stored as JSON.
+serde_json.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+# Pool contention metrics (`sqlite::pool`); the web crate installs the recorder.
+metrics.workspace = true
+futures-util.workspace = true
+# At-rest encryption of stored credentials (`sealing`).
+aes-gcm.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+metrics-exporter-prometheus.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Safe handle metadata; already present at this exact version in the workspace lock.
+winapi-util = "=0.1.11"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Stable mount IDs reject file-only bind aliases that bypass an adjacent lock.
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

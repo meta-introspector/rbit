@@ -1,0 +1,699 @@
+{
+  "paths": {
+    "/repos/{owner}/{repo}/deployments": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        }
+      ],
+      "get": {
+        "operationId": "listDeploymentEvidence",
+        "tags": [
+          "actions"
+        ],
+        "summary": "Bounded current environment jobs, immutable completed attempts and audited promotion requests",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded current environment jobs, immutable completed attempts and audited promotion requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentDashboard"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The selected workflow configuration or default branch changed."
+          },
+          "422": {
+            "description": "Invalid source, artifact provenance or workflow inputs."
+          }
+        },
+        "description": "Read access to repository Actions. Status fields describe recorded workflow outcomes; observed environment URLs are not monitored live health. Completed attempts survive run retention. A next_before cursor pages through older completed attempts. Attempt sha is the logical deployed source; workflow_sha is the executing workflow commit. Origin attempt/artifact fields retain producer provenance after run pruning and do not imply artifact bytes remain available.",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/deployments/requests": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        }
+      ],
+      "post": {
+        "operationId": "requestDeployment",
+        "tags": [
+          "actions"
+        ],
+        "summary": "Dispatch the current trusted deployment workflow with exact selected source identity",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Dispatch the current trusted deployment workflow with exact selected source identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The selected workflow configuration or default branch changed."
+          },
+          "422": {
+            "description": "Invalid source, artifact provenance or workflow inputs."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentRequest"
+              }
+            }
+          }
+        },
+        "description": "Requires write token scope, Dispatch right and current repository write access. Promotion selects a successful trusted own-repository attempt in the configured staging environment; rollback selects one in the target environment. The current default-branch workflow receives deployment_sha, deployment_environment and deployment_operation; optional artifact_id/artifact_digest must match a successful producing job in the exact source run attempt. Current environment reviews and wait timers apply. Intent-bound deployment runs cannot rerun historic workflows; submit a new request."
+      }
+    },
+    "/repos/{owner}/{repo}/deployments/workflows/{environment}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/owner"
+        },
+        {
+          "$ref": "#/components/parameters/repo"
+        },
+        {
+          "name": "environment",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "maxLength": 255
+          }
+        }
+      ],
+      "put": {
+        "operationId": "configureDeploymentWorkflow",
+        "tags": [
+          "actions"
+        ],
+        "summary": "Configure an administrator-selected deployment workflow on the current default branch",
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configure an administrator-selected deployment workflow on the current default branch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentWorkflow"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The selected workflow configuration or default branch changed."
+          },
+          "422": {
+            "description": "Invalid source, artifact provenance or workflow inputs."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "source_environment",
+                  "workflow"
+                ],
+                "properties": {
+                  "source_environment": {
+                    "type": "string",
+                    "maxLength": 255
+                  },
+                  "workflow": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                }
+              }
+            }
+          }
+        },
+        "description": "Requires admin token scope and current repository administration. Both source and target environments must already exist and differ. The workflow must declare string inputs deployment_sha, deployment_environment and deployment_operation. Stable configuration identity and generation bind subsequent requests."
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DeploymentRequest": {
+        "type": "object",
+        "required": [
+          "environment",
+          "operation",
+          "source_attempt",
+          "configuration_id",
+          "configuration_generation"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "promote",
+              "rollback"
+            ]
+          },
+          "source_attempt": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "configuration_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "configuration_generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "artifact_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "artifact_digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      },
+      "DeploymentAttempt": {
+        "type": "object",
+        "required": [
+          "id",
+          "environment",
+          "sha",
+          "job_id",
+          "job_name",
+          "job_attempt",
+          "run_number",
+          "run_attempt",
+          "run_available",
+          "workflow_path",
+          "status",
+          "trusted",
+          "is_fork",
+          "event",
+          "observed_environment_url",
+          "finished_at",
+          "origin_attempt_id",
+          "origin_artifact_id",
+          "origin_artifact_digest",
+          "workflow_sha"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "job_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "job_name": {
+            "type": "string"
+          },
+          "job_attempt": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "run_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "run_attempt": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "run_available": {
+            "type": "boolean"
+          },
+          "workflow_path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failure",
+              "cancelled",
+              "skipped",
+              "waiting",
+              "running",
+              "blocked",
+              "awaiting_approval"
+            ]
+          },
+          "trusted": {
+            "type": "boolean"
+          },
+          "is_fork": {
+            "type": "boolean"
+          },
+          "event": {
+            "type": "string"
+          },
+          "observed_environment_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "origin_attempt_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "origin_artifact_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "origin_artifact_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow_sha": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+          }
+        }
+      },
+      "ActiveDeploymentAttempt": {
+        "type": "object",
+        "required": [
+          "environment",
+          "sha",
+          "job_id",
+          "job_name",
+          "job_attempt",
+          "run_number",
+          "status",
+          "observed_environment_url",
+          "origin_attempt_id",
+          "origin_artifact_id",
+          "origin_artifact_digest",
+          "workflow_sha"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "job_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "job_name": {
+            "type": "string"
+          },
+          "job_attempt": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "run_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "success",
+              "failure",
+              "cancelled",
+              "skipped",
+              "waiting",
+              "running",
+              "blocked",
+              "awaiting_approval",
+              null
+            ]
+          },
+          "observed_environment_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin_attempt_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "origin_artifact_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "origin_artifact_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow_sha": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+          }
+        }
+      },
+      "DeploymentWorkflow": {
+        "type": "object",
+        "required": [
+          "id",
+          "generation",
+          "environment",
+          "source_environment",
+          "workflow_path"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "environment": {
+            "type": "string"
+          },
+          "source_environment": {
+            "type": "string"
+          },
+          "workflow_path": {
+            "type": "string"
+          }
+        }
+      },
+      "DeploymentIntent": {
+        "type": "object",
+        "required": [
+          "id",
+          "actor_id",
+          "operation",
+          "environment",
+          "source_attempt_id",
+          "source_sha",
+          "artifact_id",
+          "artifact_digest",
+          "workflow_sha",
+          "workflow_path",
+          "workflow_ref",
+          "run_id",
+          "run_number",
+          "workflow_status",
+          "created_at",
+          "origin_attempt_id",
+          "origin_artifact_id",
+          "origin_artifact_digest"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "actor_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "promote",
+              "rollback"
+            ]
+          },
+          "environment": {
+            "type": "string"
+          },
+          "source_attempt_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source_sha": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "artifact_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "artifact_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow_sha": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "workflow_path": {
+            "type": "string"
+          },
+          "workflow_ref": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "run_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "workflow_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "success",
+              "failure",
+              "cancelled",
+              "skipped",
+              "waiting",
+              "running",
+              "blocked",
+              "awaiting_approval",
+              null
+            ]
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "origin_attempt_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "origin_artifact_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "origin_artifact_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DeploymentDashboard": {
+        "type": "object",
+        "required": [
+          "attempts",
+          "active",
+          "configurations",
+          "requests",
+          "next_before"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/DeploymentAttempt"
+            }
+          },
+          "active": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/ActiveDeploymentAttempt"
+            }
+          },
+          "configurations": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/DeploymentWorkflow"
+            }
+          },
+          "requests": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/DeploymentIntent"
+            }
+          },
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        }
+      },
+      "DeploymentRun": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "run_number",
+          "workflow_sha",
+          "workflow_path"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "run_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "workflow_sha": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "workflow_path": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

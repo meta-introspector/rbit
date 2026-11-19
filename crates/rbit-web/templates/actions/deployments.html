@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% import "actions/settings_macros.html" as am %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+{% let t = crate::views::actions::ui_text::UiText::new(*page.locale) %}
+<div class="min-w-0 space-y-6" lang="{{ page.locale.tag() }}" dir="{{ page.locale.direction().as_str() }}">
+<div><h1 class="text-xl font-semibold tracking-tight">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::Deployments)) %}{% endcall %}</h1>
+<p class="mt-2 text-sm text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentIntro)) %}{% endcall %}</p></div>
+{% call am::form_error(t, error) %}{% endcall %}
+{% if can_write && !configurations.is_empty() %}
+<form method="post" action="{{ action_url }}" class="box min-w-0 space-y-4 p-4">
+<h2 class="font-medium">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::NewDeploymentRequest)) %}{% endcall %}</h2>
+<p class="text-sm text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentSourceHint)) %}{% endcall %}</p>
+<div class="grid min-w-0 gap-4 sm:grid-cols-2">
+<div class="min-w-0"><label class="label" for="deployment-source">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::SourceAttempt)) %}{% endcall %}</label>
+<select class="input w-full" id="deployment-source" name="source_attempt" required><option value="">—</option>{% for row in attempts %}{% if row.selectable %}<option value="{{ row.id }}"{% if draft.source_attempt == row.id.to_string() %} selected{% endif %}>{{ row.environment }} · {{ row.name }} · #{{ row.run_number }} / {{ row.attempt }} · {{ row.sha }}</option>{% endif %}{% endfor %}</select></div>
+<div class="min-w-0"><label class="label" for="deployment-target">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::TargetEnvironment)) %}{% endcall %}</label>
+<select class="input w-full" id="deployment-target" name="configuration" required><option value="">—</option>{% for row in configurations %}<option value="{{ row.value }}"{% if draft.configuration == row.value %} selected{% endif %}>{{ row.source }} → {{ row.target }} · {{ row.workflow }}</option>{% endfor %}</select></div>
+<div class="min-w-0 sm:col-span-2"><label class="label" for="deployment-operation">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentOperation)) %}{% endcall %}</label>
+<select class="input w-full" id="deployment-operation" name="operation"><option value="promote"{% if draft.operation == "promote" %} selected{% endif %}>{{ t.get(rbit_localization::ActionsEnvironmentMessage::PromoteDeployment) }}</option><option value="rollback"{% if draft.operation == "rollback" %} selected{% endif %}>{{ t.get(rbit_localization::ActionsEnvironmentMessage::RollbackDeployment) }}</option></select></div>
+<div class="min-w-0"><label class="label" for="deployment-artifact">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentArtifactId)) %}{% endcall %}</label><input class="input w-full" id="deployment-artifact" name="artifact_id" value="{{ draft.artifact_id }}" inputmode="numeric" maxlength="20"></div>
+<div class="min-w-0"><label class="label" for="deployment-digest">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentArtifactDigest)) %}{% endcall %}</label><input class="input w-full font-mono" id="deployment-digest" name="artifact_digest" value="{{ draft.artifact_digest }}" maxlength="64" dir="ltr"></div>
+</div>
+<p class="text-xs text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentArtifactHint)) %}{% endcall %}</p>
+<button class="btn btn-primary min-h-11" type="submit">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::NewDeploymentRequest)) %}{% endcall %}</button>
+</form>
+{% endif %}
+{% if configurations.is_empty() %}<p class="box p-4 text-sm text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::NoDeploymentConfigurations)) %}{% endcall %}</p>{% endif %}
+<section class="min-w-0 space-y-3"><h2 class="font-medium">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::ActiveDeployments)) %}{% endcall %}</h2>
+{% let rows = active %}{% include "actions/deployments/attempts.html" %}</section>
+<section class="min-w-0 space-y-3"><h2 class="font-medium">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::RequestedDeployments)) %}{% endcall %}</h2>
+{% if intents.is_empty() %}<p class="text-sm text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::NoDeploymentRequests)) %}{% endcall %}</p>{% endif %}
+{% for row in intents %}<article class="box min-w-0 space-y-3 p-4">
+<h3 class="break-words font-medium">{{ row.environment }} · {% call ui::localized(t.get(*row.operation)) %}{% endcall %} <span class="text-ink-muted">#{{ row.id }}</span></h3>
+<p class="text-xs text-ink-muted"><time datetime="{{ row.when.iso() }}">{% call ui::localized(row.when.relative(page.locale)) %}{% endcall %}</time></p>
+<dl class="min-w-0 space-y-2 text-sm"><div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::RequestedIdentity)) %}{% endcall %}</dt><dd class="break-all font-mono" dir="ltr">{{ row.source_sha }}</dd></div>
+<div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::SourceAttempt)) %}{% endcall %}</dt><dd>{{ row.source_attempt }}</dd></div>
+<div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentWorkflowCommit)) %}{% endcall %}</dt><dd class="break-all font-mono" dir="ltr">{{ row.workflow }} · {{ row.workflow_sha }}</dd></div>
+{% if let Some((id, digest)) = row.origin_artifact %}<div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentOriginArtifact)) %}{% endcall %}</dt><dd class="break-all font-mono" dir="ltr">{{ id }} · {{ digest }} · #{{ row.origin_attempt }}</dd></div>{% endif %}
+{% if let Some((id, digest)) = row.artifact %}<div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentArtifactId)) %}{% endcall %}</dt><dd class="break-all font-mono" dir="ltr">{{ id }} · {{ digest }}</dd></div>{% endif %}
+<div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::WorkflowOutcome)) %}{% endcall %}</dt><dd>{% if let Some(look) = row.look %}{% include "actions/state.html" %} {{ look.label }}{% else %}{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentRetainedOutcome)) %}{% endcall %}{% endif %}</dd></div></dl>
+{% if let Some(url) = row.run_url %}<a class="btn min-h-11" href="{{ url }}">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentRun)) %}{% endcall %} #{{ row.run_number }}</a>{% endif %}
+</article>{% endfor %}</section>
+<section class="min-w-0 space-y-3"><h2 class="font-medium">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::CompletedAttempts)) %}{% endcall %}</h2>
+{% let rows = attempts %}{% include "actions/deployments/attempts.html" %}
+{% if let Some(url) = next_url %}<a class="btn min-h-11" href="{{ url }}">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::OlderDeploymentAttempts)) %}{% endcall %}</a>{% endif %}</section>
+{% if can_admin %}
+<section class="box min-w-0 space-y-4 p-4"><h2 class="font-medium">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentConfiguration)) %}{% endcall %}</h2>
+<p class="text-sm text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentWorkflowHint)) %}{% endcall %}</p>
+{% for row in configurations %}<p class="break-all text-sm" dir="ltr">{{ row.source }} → {{ row.target }} · {{ row.workflow }}</p>{% endfor %}
+<form method="post" action="{{ configure_url }}" class="grid min-w-0 gap-4 sm:grid-cols-2">
+<div class="min-w-0"><label class="label" for="configuration-source">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::SourceEnvironment)) %}{% endcall %}</label><input class="input w-full" id="configuration-source" name="source_environment" maxlength="255" required></div>
+<div class="min-w-0"><label class="label" for="configuration-target">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::TargetEnvironment)) %}{% endcall %}</label><input class="input w-full" id="configuration-target" name="environment" maxlength="255" required></div>
+<div class="min-w-0 sm:col-span-2"><label class="label" for="configuration-workflow">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentWorkflow)) %}{% endcall %}</label><input class="input w-full font-mono" id="configuration-workflow" name="workflow" maxlength="1024" dir="ltr" required></div>
+<div class="sm:col-span-2"><button class="btn min-h-11" type="submit">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::ConfigureDeployment)) %}{% endcall %}</button></div>
+</form></section>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,263 @@
+//! Repository insights: language breakdown and last commit per tree entry.
+//!
+//! Both are derived from Git alone and cached in redb by commit id, so a cached value is
+//! valid forever and nothing needs invalidating on push. The cache is an optimisation
+//! only: if it cannot be read or written, the value is computed and served anyway.
+
+use crate::insights_recent::{RecentWalks, WalkKey};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use rbit_core::Timestamp;
+use rbit_git::{CommitSummary, LanguageShare, LanguageStats, LastCommitLimits, TreeEntry, TreeView};
+use rbit_storage::kv::{CachedCommit, CachedLanguage, CachedLanguageStats, CachedLastCommits, InsightsCache};
+
+use crate::{RepoContext, ServiceContext, ServiceError};
+
+#[derive(Debug, Clone)]
+pub struct InsightsService {
+    cache: InsightsCache,
+    recent: Arc<RecentWalks>,
+}
+
+impl InsightsService {
+    pub(crate) fn new(ctx: ServiceContext) -> Self {
+        let ServiceContext { kv, .. } = ctx;
+        Self { cache: kv.insights(), recent: Arc::default() }
+    }
+
+    /// The language breakdown of `revision` (a branch, tag or commit id).
+    pub async fn languages(&self, repo: &RepoContext, revision: &str) -> Result<LanguageStats, ServiceError> {
+        let commit_id = repo.reader.commit_id(revision.to_owned()).await?;
+        match self.cache.language_stats(&commit_id).await {
+            Ok(Some(cached)) => return Ok(language_stats_from_cache(cached)),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "language cache read failed"),
+        }
+
+        let stats = repo.reader.language_stats(commit_id.clone()).await?;
+        if let Err(error) = self.cache.put_language_stats(&commit_id, &language_stats_to_cache(&stats)).await {
+            tracing::warn!(%error, "language cache write failed");
+        }
+        Ok(stats)
+    }
+
+    /// The newest commit that changed each of `entries` inside the directory `path` as of
+    /// `revision`. Entries the bounded history walk could not resolve are absent.
+    pub async fn last_commits(
+        &self,
+        repo: &RepoContext,
+        revision: &str,
+        path: &str,
+        entries: &[TreeEntry],
+    ) -> Result<HashMap<String, CommitSummary>, ServiceError> {
+        Ok(self.last_commits_inner(repo, revision, path, entries, true).await?.commits.clone())
+    }
+
+    /// The last commits of `entries`, a page of the directory `tree` read at `path`.
+    ///
+    /// When the page is the whole directory (every entry of `tree`) a complete result is
+    /// persisted like [`Self::last_commits`], so directories other than the warmed root
+    /// survive the short-lived in-memory reuse. A subset must never populate the
+    /// persistent whole-directory cache: readers take any entry it lacks as unresolved.
+    pub async fn last_commits_page(
+        &self,
+        repo: &RepoContext,
+        tree: &TreeView,
+        path: &str,
+        entries: &[TreeEntry],
+    ) -> Result<Arc<rbit_git::LastCommits>, ServiceError> {
+        let requested: HashSet<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        let whole_directory = tree.entries.iter().all(|entry| requested.contains(entry.name.as_str()));
+        self.last_commits_inner(repo, &tree.commit.id, path, entries, whole_directory).await
+    }
+
+    async fn last_commits_inner(
+        &self,
+        repo: &RepoContext,
+        revision: &str,
+        path: &str,
+        entries: &[TreeEntry],
+        whole_directory: bool,
+    ) -> Result<Arc<rbit_git::LastCommits>, ServiceError> {
+        if !repo.access.can_read() {
+            return Err(ServiceError::Forbidden);
+        }
+        let commit_id = repo.reader.commit_id(revision.to_owned()).await?;
+        match self.cache.last_commits(&commit_id, path).await {
+            Ok(Some(cached)) => {
+                let names: HashSet<_> = entries.iter().map(|entry| entry.name.as_str()).collect();
+                let commits = last_commits_from_cache(&cached, &names);
+                return Ok(Arc::new(rbit_git::LastCommits { commits, timed_out: false }));
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "last-commit cache read failed"),
+        }
+
+        let mut names: Vec<_> = entries.iter().map(|entry| entry.name.clone()).collect();
+        names.sort();
+        let key = WalkKey { repository: repo.repo.repo.id, commit: commit_id.clone(), path: path.into(), names: names.clone() };
+        let reader = repo.reader.clone();
+        let revision = commit_id.clone();
+        let directory = path.to_owned();
+        let result = self
+            .recent
+            .run(key, move || async move { Ok(reader.last_commits(revision, directory, names, LastCommitLimits::default()).await?) })
+            .await?;
+        // Incomplete walks are reused briefly in memory, never persisted as complete.
+        if whole_directory && !result.timed_out {
+            let cached: Vec<(String, CachedCommit)> =
+                result.commits.iter().map(|(name, commit)| (name.clone(), commit_to_cache(commit))).collect();
+            let cached = CachedLastCommits::from_entries(cached.iter().map(|(name, commit)| (name.clone(), commit)));
+            if let Err(error) = self.cache.put_last_commits(&commit_id, path, &cached).await {
+                tracing::warn!(%error, "last-commit cache write failed");
+            }
+        }
+        Ok(result)
+    }
+}
+
+fn language_stats_to_cache(stats: &LanguageStats) -> CachedLanguageStats {
+    CachedLanguageStats {
+        total_bytes: stats.total_bytes,
+        languages: stats
+            .languages
+            .iter()
+            .map(|share| CachedLanguage {
+                name: share.name.clone(),
+                color: share.color.clone(),
+                bytes: share.bytes,
+                percent: share.percent,
+            })
+            .collect(),
+    }
+}
+
+fn language_stats_from_cache(cached: CachedLanguageStats) -> LanguageStats {
+    LanguageStats {
+        total_bytes: cached.total_bytes,
+        languages: cached
+            .languages
+            .into_iter()
+            .map(|language| LanguageShare { name: language.name, color: language.color, bytes: language.bytes, percent: language.percent })
+            .collect(),
+    }
+}
+
+fn commit_to_cache(commit: &CommitSummary) -> CachedCommit {
+    CachedCommit {
+        id: commit.id.clone(),
+        summary: commit.summary.clone(),
+        body: commit.body.clone(),
+        author_name: commit.author_name.clone(),
+        author_email: commit.author_email.clone(),
+        authored_at: commit.authored_at.0,
+        parent_ids: commit.parent_ids.clone(),
+    }
+}
+
+fn commit_from_cache(commit: &CachedCommit) -> CommitSummary {
+    CommitSummary {
+        id: commit.id.clone(),
+        short_id: commit.id.chars().take(7).collect(),
+        summary: commit.summary.clone(),
+        body: commit.body.clone(),
+        author_name: commit.author_name.clone(),
+        author_email: commit.author_email.clone(),
+        authored_at: Timestamp(commit.authored_at),
+        parent_ids: commit.parent_ids.clone(),
+    }
+}
+
+fn last_commits_from_cache(cached: &CachedLastCommits, names: &HashSet<&str>) -> HashMap<String, CommitSummary> {
+    // Convert each distinct commit once, then clone per entry.
+    let commits: Vec<CommitSummary> = cached.commits.iter().map(commit_from_cache).collect();
+    cached
+        .entries
+        .iter()
+        .filter(|(name, _)| names.contains(name.as_str()))
+        .filter_map(|(name, index)| Some((name.clone(), commits.get(usize::try_from(*index).ok()?)?.clone())))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_whole_directory_pages_are_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = rbit_core::Config::default();
+        config.storage.data_dir = dir.path().join("data");
+        std::fs::create_dir_all(config.storage.repositories_dir()).unwrap();
+        let database = rbit_storage::Database::open(&config.storage.sqlite_path()).await.unwrap();
+        let kv = rbit_storage::KvStore::open(&config.storage.kv_path()).unwrap();
+        let services = crate::Services::new(Arc::new(config), &database, &kv).await.unwrap();
+        let signup = crate::SignUp { username: "ada".into(), email: "ada@example.com".into(), password: "correct horse battery".into() };
+        let ada = services.accounts.create_user(signup, Some(true)).await.unwrap();
+        let input = crate::CreateRepository { name: "demo".into(), description: String::new(), visibility: rbit_core::Visibility::Public };
+        services.repositories.create(&ada, input).await.unwrap();
+        let repo = services.repositories.open(Some(&ada), "ada", "demo").await.unwrap();
+
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(work.join("src")).unwrap();
+        for file in ["src/a.rs", "src/b.rs", "src/c.rs"] {
+            std::fs::write(work.join(file), file).unwrap();
+        }
+        for args in [
+            &["init", "-q"][..],
+            &["add", "."],
+            &["commit", "-q", "-m", "Add sources"],
+            &["push", "-q", repo.disk_path.to_str().unwrap(), "HEAD:refs/heads/main"],
+        ] {
+            let status = std::process::Command::new("git")
+                .current_dir(&work)
+                .args(["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "-c", "init.defaultBranch=main"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+
+        let tree = repo.reader.tree("main".into(), "src".into()).await.unwrap();
+        let cache = kv.insights();
+        let page = services.insights.last_commits_page(&repo, &tree, "src", &tree.entries[..2]).await.unwrap();
+        assert_eq!(page.commits.len(), 2);
+        assert_eq!(cache.last_commits(&tree.commit.id, "src").await.unwrap(), None, "a subset is never the whole directory");
+
+        let whole = services.insights.last_commits_page(&repo, &tree, "src", &tree.entries).await.unwrap();
+        assert_eq!(whole.commits.len(), 3);
+        let stored = cache.last_commits(&tree.commit.id, "src").await.unwrap().expect("the whole directory is persisted");
+        assert_eq!(stored.iter().count(), 3);
+        // Later pages, whole or not, are answered from the persisted entry.
+        let again = services.insights.last_commits_page(&repo, &tree, "src", &tree.entries[2..]).await.unwrap();
+        assert_eq!(again.commits.keys().collect::<Vec<_>>(), [&tree.entries[2].name]);
+    }
+
+    #[test]
+    fn commits_survive_the_cache_format() {
+        let commit = CommitSummary {
+            id: "0123456789abcdef0123456789abcdef01234567".into(),
+            short_id: "0123456".into(),
+            summary: "Fix it".into(),
+            body: Some("Details".into()),
+            author_name: "Ada".into(),
+            author_email: "ada@example.com".into(),
+            authored_at: Timestamp(1_700_000_000),
+            parent_ids: vec!["fedcba9876543210fedcba9876543210fedcba98".into()],
+        };
+        let restored = commit_from_cache(&commit_to_cache(&commit));
+        assert_eq!(format!("{restored:?}"), format!("{commit:?}"));
+    }
+
+    #[test]
+    fn language_stats_survive_the_cache_format() {
+        let stats = LanguageStats {
+            total_bytes: 100,
+            languages: vec![LanguageShare { name: "Rust".into(), color: "#dea584".into(), bytes: 100, percent: 100.0 }],
+        };
+        assert_eq!(language_stats_from_cache(language_stats_to_cache(&stats)), stats);
+    }
+}

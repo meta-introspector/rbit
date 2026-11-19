@@ -1,0 +1,45 @@
+<details class="box mt-6 p-4">
+<summary class="flex min-h-11 cursor-pointer items-center gap-2 font-medium">
+<span aria-hidden="true">▸</span>{% call ui::localized(OrgMessage::ProjectIterations.text(page.locale)) %}{% endcall %}</summary>
+<p class="hint mt-2">{% call ui::localized(OrgMessage::ProjectIterationsHint.text(page.locale)) %}{% endcall %}</p>
+<ul class="mt-3 space-y-4">{% for iteration in data.iterations %}<li class="min-w-0">
+<p class="font-medium break-words">{{ iteration.title }} {% if iteration.archived %}<span class="badge">{% call ui::localized(OrgMessage::ProjectArchived.text(page.locale)) %}{% endcall %}</span>{% endif %}</p>
+<p class="hint">{{ iteration.starts_on }} – {{ iteration.ends_on }}</p>{% if data.can_manage %}<form method="post" action="{{ base }}/iterations/{{ iteration.id }}" class="mt-2 grid gap-3 sm:grid-cols-2">
+<input type="hidden" name="revision" value="{{ iteration.revision }}">
+<label class="min-w-0">
+<span class="label">{% call ui::localized(OrgMessage::ProjectIterationName.text(page.locale)) %}{% endcall %}</span>
+<input class="input min-w-0" type="text" name="title" maxlength="100" value="{{ iteration.title }}" required>
+</label>
+<label class="min-w-0">
+<span class="label">{% call ui::localized(OrgMessage::ProjectStartsOn.text(page.locale)) %}{% endcall %}</span>
+<input class="input min-w-0" type="date" name="starts_on" value="{{ iteration.starts_on }}" required>
+</label>
+<label class="min-w-0">
+<span class="label">{% call ui::localized(OrgMessage::ProjectEndsOn.text(page.locale)) %}{% endcall %}</span>
+<input class="input min-w-0" type="date" name="ends_on" value="{{ iteration.ends_on }}" required>
+</label>
+<label class="flex min-h-11 items-center gap-2">
+<input type="checkbox" name="archived" value="true" {% if iteration.archived %}checked{% endif %}>{% call ui::localized(OrgMessage::ProjectArchived.text(page.locale)) %}{% endcall %}</label>
+<button class="btn self-end" type="submit">{% call ui::localized(OrgMessage::ProjectSave.text(page.locale)) %}{% endcall %}</button>
+</form>
+<form method="post" action="{{ base }}/iterations/{{ iteration.id }}/delete" class="mt-2">
+<input type="hidden" name="revision" value="{{ iteration.revision }}">
+<button class="btn btn-ghost" type="submit">{% call ui::localized(OrgMessage::ProjectDeleteIteration.text(page.locale)) %}{% endcall %}</button>
+</form>
+{% endif %}</li>
+{% endfor %}</ul>{% if data.can_manage %}<form method="post" action="{{ base }}/iterations" class="mt-4 grid gap-3 sm:grid-cols-2">
+<label class="min-w-0">
+<span class="label">{% call ui::localized(OrgMessage::ProjectIterationName.text(page.locale)) %}{% endcall %}</span>
+<input class="input min-w-0" type="text" name="title" maxlength="100" required>
+</label>
+<label class="min-w-0">
+<span class="label">{% call ui::localized(OrgMessage::ProjectStartsOn.text(page.locale)) %}{% endcall %}</span>
+<input class="input min-w-0" type="date" name="starts_on" required>
+</label>
+<label class="min-w-0">
+<span class="label">{% call ui::localized(OrgMessage::ProjectEndsOn.text(page.locale)) %}{% endcall %}</span>
+<input class="input min-w-0" type="date" name="ends_on" required>
+</label>
+<button class="btn self-end" type="submit">{% call ui::localized(OrgMessage::ProjectNewIteration.text(page.locale)) %}{% endcall %}</button>
+</form>
+{% endif %}</details>

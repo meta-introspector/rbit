@@ -1,0 +1,33 @@
+# Install as .rbit/workflows/security-native.yml and configure that exact trusted path.
+# Native scanning and any package metadata disclosure must first be enabled by an admin.
+name: Request native security scans
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full immutable commit to scan (empty uses this workflow commit)
+        type: string
+        default: ""
+  schedule:
+    - cron: '17 3 * * *'
+permissions:
+  contents: write
+jobs:
+  request:
+    runs-on: linux
+    timeout-minutes: 2
+    steps:
+      - name: Request server-owned scanning
+        env:
+          TOKEN: ${{ secrets.RBIT_TOKEN }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET: ${{ inputs.commit_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          sha="${TARGET:-$WORKFLOW_SHA}"
+          [[ "$sha" =~ ^([a-fA-F0-9]{40}|[a-fA-F0-9]{64})$ ]] || exit 2
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            --data "{\"commit_sha\":\"$sha\"}" \
+            "$API_URL/repos/$REPOSITORY/security/automation/scans"

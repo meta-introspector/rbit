@@ -1,0 +1,17 @@
+{% import "macros.html" as ui %}
+{#- The layout's fixed parts are templates of their own in layout/ (views/layout.rs), so a
+    page derived from this one compiles four calls and its own blocks, not a whole copy of
+    the layout. The blocks stay here, where pages override them. The two lines below are
+    the layout's first output, as before. #}
+
+{{ page.layout_head()|safe }}
+  {#- The server renders the visitor's theme into <html>, so theme.js only migrates old
+      choices here and need not hold up the first paint. Pages rendered without the
+      visitor's cookie (error, offline) run it synchronously instead; it stays after the
+      stylesheets because the theme sheet it may link must come after app.css. -#}
+  {% block theme_script %}<script src="{{ page.asset("theme.js") }}" async></script>{% endblock %}{{ page.layout_top()|safe }}
+        {% block nav_context %}<a href="/" class="font-semibold tracking-tight">{{ page.site_name }}</a>{% endblock %}{{ page.layout_menus()|safe }}{% block subnav %}{% endblock %}</div>
+
+  {#- Markers: where `partial.rs` cuts a page for partial responses (title, main). -#}
+  <!--partial:main--><main id="main" lang="{{ page.content_locale.tag() }}" dir="{{ page.content_locale.direction().as_str() }}" class="mx-auto w-full max-w-[96rem] flex-1 px-4 pb-16 pt-6 sm:px-6 sm:pt-8"{% if page.is_signed_in() %} hx-history="false"{% endif %}>
+    {# probe-boundary: preserve source whitespace #}

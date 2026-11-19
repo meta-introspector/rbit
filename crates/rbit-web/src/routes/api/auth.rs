@@ -1,0 +1,336 @@
+//! Who is calling the API: anonymous, the owner of a personal access token, or a running
+//! workflow task.
+//!
+//! Tokens arrive as `Authorization: Bearer rbit_…` (or GitHub's `token rbit_…`; the legacy
+//! `rit_…` spelling works too); cookies are never read, so the API needs no CSRF
+//! protection and a browser session cannot be ridden. Presented tokens are throttled per client address (`ApiAuth`; invalid ones cost
+//! extra), authenticated requests per account and anonymous ones per address
+//! (`ApiRequest`). Expired tokens and tokens of suspended accounts are refused like
+//! unknown ones. An instance that requires signing in answers anonymous requests 401. With `[api] enabled = false` every request is answered 404 here.
+//!
+//! Repositories are opened by their current name; an old name of a repository the caller
+//! may read (it was renamed or transferred) is answered with a redirect to the same
+//! endpoint under the new name, as GitHub does ([`ApiError::moved`]). A repository that
+//! now has the old name wins, and repositories the caller may not read stay 404, so a
+//! new name never leaks.
+//!
+//! A workflow task's token (`rbat_…`) is a caller kind of its own, never a user
+//! (`docs/design/actions.md` §11.3): it is accepted only on the endpoints of
+//! [`TASK_ROUTES`](super::task_routes::TASK_ROUTES) — reading contents, refs, commits, releases and run artifacts; creating statuses, and
+//! creating, editing and deleting releases and their files with `contents: write`; reading
+//! issues and their comments with `issues` or `pull-requests: read`; commenting, and editing
+//! and deleting rbit Actions' own comments, with `issues` or `pull-requests: write` — and
+//! everywhere else answers 403. It opens its own repository at
+//! its grant and other public ones read-only, writes only to its own, and is re-checked on
+//! every request. With Actions disabled it is refused before anything is looked up.
+#![allow(unknown_lints, clippy::unused_async_trait_impl)]
+
+use std::sync::Arc;
+
+use axum::{
+    extract::{FromRequestParts, MatchedPath},
+    http::{HeaderValue, Method, header, request::Parts},
+};
+use rbit_core::{RepoAccess, TokenScope, User};
+use rbit_services::{
+    RepoContext, ServiceError, ThrottleScope,
+    actions::tokens::TaskGrant,
+    tokens::{Right, TokenLimit},
+};
+
+use super::{
+    ApiMethod, PREFIX,
+    error::{ApiError, ApiResult},
+    task_routes::{TaskNeed, task_route},
+};
+use crate::{AppState, client_ip::ClientIp};
+
+mod agents;
+mod scope;
+mod watch;
+
+/// The caller of an API request.
+#[derive(Debug, Clone, Default)]
+pub struct Caller {
+    user: Option<Arc<User>>,
+    scope: Option<TokenScope>,
+    // Actions: S.
+    /// A workflow task, and what the endpoint it calls needs of it.
+    task: Option<(TaskGrant, TaskNeed)>,
+    /// A scoped token's limit: one repository, some rights (agent plan step 4.8).
+    token_limit: Option<TokenLimit>,
+    /// The token the caller authenticated with.
+    token: Option<rbit_core::AccessTokenId>,
+    /// The request being answered, for redirects from old repository names.
+    request: Arc<RequestTarget>,
+}
+
+/// Method, path and query of a request.
+#[derive(Debug, Clone, Default)]
+struct RequestTarget {
+    method: Method,
+    path: String,
+    query: Option<String>,
+}
+
+impl RequestTarget {
+    /// This request's URL with the path segments `owner/name` (right after `repos/` or
+    /// `user/starred/`) replaced by `moved_to`, the current full name; `None` if the path
+    /// does not name `owner/name` there.
+    fn moved(&self, base_url: &str, owner: &str, name: &str, moved_to: &str) -> Option<String> {
+        let segments: Vec<&str> = self.path.split('/').collect();
+        let at = (1..segments.len().saturating_sub(1)).find(|&i| {
+            matches!(segments[i - 1], "repos" | "starred")
+                && segments[i].eq_ignore_ascii_case(owner)
+                && segments[i + 1].eq_ignore_ascii_case(name)
+        })?;
+        let mut path = segments[..at].join("/");
+        path.push('/');
+        path.push_str(moved_to);
+        for rest in &segments[at + 2..] {
+            path.push('/');
+            path.push_str(rest);
+        }
+        let query = self.query.as_deref().map(|query| format!("?{query}")).unwrap_or_default();
+        Some(format!("{base_url}{path}{query}"))
+    }
+}
+
+impl Caller {
+    /// The token the caller authenticated with; `None` for a workflow task.
+    pub fn token_id(&self) -> Option<rbit_core::AccessTokenId> {
+        self.token
+    }
+
+    pub fn user(&self) -> Option<&User> {
+        self.user.as_deref()
+    }
+
+    // Actions: task tokens.
+    /// The workflow task calling, for the endpoints of [`TASK_ROUTES`](super::task_routes::TASK_ROUTES) that act for one.
+    pub fn task(&self) -> Option<&TaskGrant> {
+        self.task.as_ref().map(|(grant, _)| grant)
+    }
+
+    /// The authenticated user; 401 for anonymous requests, 403 for a workflow task.
+    pub fn require_user(&self) -> ApiResult<&User> {
+        if self.task.is_some() {
+            return Err(ApiError::forbidden("This endpoint does not act for workflow tasks"));
+        }
+        self.user().ok_or_else(|| ApiError::unauthorized("Requires authentication"))
+    }
+
+    /// The authenticated user, if their token's scope includes `scope`; 401 for anonymous
+    /// requests and 403 for a token with a narrower scope.
+    pub fn require(&self, scope: TokenScope) -> ApiResult<&User> {
+        let user = self.require_user()?;
+        // The admin scope changes protection, hooks, secrets, runners and the repository
+        // itself: nothing a token limited to some rights may do, whatever scope it was given.
+        if scope == TokenScope::Admin && self.is_limited() {
+            return Err(ApiError::forbidden("A limited token cannot do what needs the admin scope"));
+        }
+        match self.scope {
+            Some(granted) if !granted.allows(scope) => Err(scope::refusal(granted, scope)),
+            _ => Ok(user),
+        }
+    }
+
+    // Agent loop: scoped tokens.
+    /// Refuses (403) a limited token without `right`; any other caller passes.
+    pub fn require_right(&self, right: Right) -> ApiResult<()> {
+        match &self.token_limit {
+            Some(limit) if !limit.allows(right) => {
+                Err(ApiError::forbidden(format!("This token is limited and does not have the `{}` right", right.as_str())))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Refuses (403) a limited token without `approve` for a review verdict (`APPROVE` or
+    /// `REQUEST_CHANGES`): a review act, as resolving a thread is. Comments need no right.
+    pub fn require_verdict_right(&self, event: Option<&str>) -> ApiResult<()> {
+        let verdict = event.is_some_and(|event| event.eq_ignore_ascii_case("APPROVE") || event.eq_ignore_ascii_case("REQUEST_CHANGES"));
+        if verdict { self.require_right(Right::Approve) } else { Ok(()) }
+    }
+
+    /// Refuses (403) a limited token: for writes no right covers (switching workflows,
+    /// deleting artifacts and caches); any other caller passes.
+    pub fn require_unlimited(&self) -> ApiResult<()> {
+        if self.is_limited() { Err(ApiError::forbidden("A limited token cannot do this")) } else { Ok(()) }
+    }
+
+    /// Whether the caller may reach repository `repo` at all: a limited token reaches only its
+    /// own. For a repository opened some other way than [`Self::open_repo`], such as a pull
+    /// request's head.
+    pub fn reaches(&self, repo: rbit_core::RepoId) -> bool {
+        self.token_limit.as_ref().is_none_or(|limit| limit.reaches(repo))
+    }
+
+    /// Whether the caller's token is limited to a repository or some rights.
+    pub fn is_limited(&self) -> bool {
+        self.token_limit.is_some()
+    }
+
+    /// Caps what the caller may do with a repository to the token's scope.
+    pub fn limit(&self, access: RepoAccess) -> RepoAccess {
+        self.scope.map_or(access, |scope| scope.limit(access))
+    }
+
+    /// Opens `owner/name` as the caller sees it, with access capped by the token's scope.
+    /// Repositories the caller cannot read are 404; an old name of one they can read is a
+    /// redirect to this endpoint under its current name.
+    pub async fn open_repo(&self, state: &AppState, owner: &str, name: &str) -> ApiResult<RepoContext> {
+        // Actions: S. A task: its own repository at its grant, others public and read-only.
+        if let (Some((grant, need)), Some(actions)) = (&self.task, &state.services.actions) {
+            let ctx = if matches!(need, TaskNeed::Comment | TaskNeed::IssuesRead) {
+                actions.open_for_task_comment(grant, owner, name).await?
+            } else {
+                actions.open_for_task(grant, owner, name).await?
+            };
+            if need.writes() && ctx.repo.repo.id != grant.repo {
+                return Err(ApiError::forbidden("A workflow task may change only its own repository"));
+            }
+            return Ok(ctx);
+        }
+        let repositories = &state.services.repositories;
+        match repositories.open(self.user(), owner, name).await {
+            // A limited token sees only its repository; the rest is not there for it.
+            Ok(mut ctx) => {
+                if self.token_limit.as_ref().is_some_and(|limit| !limit.reaches(ctx.repo.repo.id)) {
+                    return Err(ApiError::not_found());
+                }
+                ctx.access = self.limit(ctx.access);
+                if self.user().is_some_and(|user| user.is_agent) && self.request.method != Method::GET && !ctx.access.can_write() {
+                    return Err(ApiError::forbidden("This agent has read-only access to the repository"));
+                }
+                Ok(ctx)
+            }
+            Err(ServiceError::NotFound) => {
+                // An old name is followed only to a repository the token reaches: a redirect
+                // would name another repository's current name.
+                let moved = repositories
+                    .moved_to(self.user(), owner, name)
+                    .await?
+                    .filter(|repo| self.token_limit.as_ref().is_none_or(|limit| limit.reaches(repo.repo.id)));
+                let location = moved.and_then(|repo| self.request.moved(state.config.server.base_url(), owner, name, &repo.full_name()));
+                Err(location.map_or_else(ApiError::not_found, |location| ApiError::moved(&self.request.method, location)))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+/// The token in an `Authorization` header: `Bearer <token>` or `token <token>`.
+pub fn presented_token(value: &HeaderValue) -> Option<&str> {
+    let value = value.to_str().ok()?.trim();
+    let (scheme, token) = value.split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") || scheme.eq_ignore_ascii_case("token")).then_some(token).filter(|token| !token.is_empty())
+}
+
+impl FromRequestParts<AppState> for Caller {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        if !state.config.api.enabled {
+            return Err(ApiError::not_found());
+        }
+        let request = Arc::new(RequestTarget {
+            method: parts.method.clone(),
+            path: parts.uri.path().to_owned(),
+            query: parts.uri.query().map(str::to_owned),
+        });
+        let ClientIp(ip) = ClientIp::resolve(&parts.extensions, &parts.headers, &state.config.security);
+        let address = ip.to_canonical().to_string();
+        let throttle = &state.services.throttle;
+
+        let Some(authorization) = parts.headers.get(header::AUTHORIZATION) else {
+            throttle.check_client(ThrottleScope::ApiRequest, &address)?;
+            if state.services.instance.require_sign_in() {
+                return Err(ApiError::unauthorized("Requires authentication"));
+            }
+            return Ok(Self { request, ..Self::default() });
+        };
+        let Some(token) = presented_token(authorization) else {
+            throttle.check_client(ThrottleScope::ApiAuth, &address)?;
+            throttle.record_client_failure(ThrottleScope::ApiAuth, &address);
+            return Err(ApiError::unauthorized("Use Authorization: Bearer <personal access token>"));
+        };
+        // Actions: foundation (F). No task token is valid while Actions is disabled, so it is
+        // refused before anything is looked up.
+        if rbit_core::actions::looks_like_task_token(token) {
+            // Actions: S. Runners often share the server's address, so task tokens have a
+            // budget of their own per address, which only wrong ones spend; each task also
+            // has its request budget, below.
+            let address = format!("task:{address}");
+            throttle.check_client_failures(ThrottleScope::ApiAuth, &address)?;
+            let grant = match &state.services.actions {
+                Some(actions) => actions.authenticate_task(token).await?,
+                None => None,
+            };
+            let Some(grant) = grant else {
+                throttle.record_client_failure(ThrottleScope::ApiAuth, &address);
+                return Err(ApiError::unauthorized("Bad credentials"));
+            };
+            // Actions: S. Only the allowlisted endpoints, with the permission they need.
+            let route = parts
+                .extensions
+                .get::<MatchedPath>()
+                .and_then(|matched| matched.as_str().strip_prefix(PREFIX))
+                .zip(api_method(&parts.method));
+            let Some(need) = route.and_then(|(path, method)| task_route(method, path)) else {
+                return Err(ApiError::forbidden("Workflow task tokens cannot be used for this endpoint"));
+            };
+            if !need.allows(&grant) {
+                return Err(ApiError::forbidden("This workflow task's token does not have the permission this endpoint needs"));
+            }
+            throttle.check(ThrottleScope::ApiRequest, &format!("task:{}", grant.task.0))?;
+            return Ok(Self { task: Some((grant, need)), request, ..Self::default() });
+        }
+        throttle.check_client(ThrottleScope::ApiAuth, &address)?;
+        let Some((user, scope, token_limit, token_id)) = state.services.tokens.authenticate_limited(token).await? else {
+            throttle.record_client_failure(ThrottleScope::ApiAuth, &address);
+            return Err(ApiError::unauthorized("Bad credentials"));
+        };
+        throttle.check(ThrottleScope::ApiRequest, &user.id().0.to_string())?;
+        if user.is_agent {
+            let route = parts.extensions.get::<MatchedPath>().and_then(|matched| matched.as_str().strip_prefix(PREFIX));
+            let (path, method) = route.zip(api_method(&parts.method)).ok_or_else(|| ApiError::forbidden("Unsupported agent operation"))?;
+            agents::check(method, path, token_limit.as_ref())?;
+        }
+        // A token limited to one repository reaches that repository's endpoints (where
+        // `open_repo` checks which repository) and who it belongs to, nothing account-wide:
+        // no repository list naming the others, no new repositories.
+        if token_limit.is_some() {
+            let route = parts.extensions.get::<MatchedPath>().and_then(|matched| matched.as_str().strip_prefix(PREFIX));
+            let allowed = route.zip(api_method(&parts.method)).is_some_and(|(path, method)| limited_route(method, path));
+            if !allowed {
+                return Err(ApiError::forbidden("A token limited to one repository cannot use this endpoint"));
+            }
+        }
+        Ok(Self { user: Some(Arc::new(user)), scope: Some(scope), task: None, token_limit, token: Some(token_id), request })
+    }
+}
+
+/// Whether a token limited to one repository may call `path`: the repository's own
+/// endpoints, and reading who it belongs to.
+fn limited_route(method: ApiMethod, path: &str) -> bool {
+    path == "/repos/{owner}/{repo}"
+        || path.starts_with("/repos/{owner}/{repo}/")
+        || (method == ApiMethod::Get && matches!(path, "/user" | "/version"))
+}
+
+// Actions: S.
+fn api_method(method: &Method) -> Option<ApiMethod> {
+    Some(match *method {
+        Method::GET => ApiMethod::Get,
+        Method::POST => ApiMethod::Post,
+        Method::PUT => ApiMethod::Put,
+        Method::PATCH => ApiMethod::Patch,
+        Method::DELETE => ApiMethod::Delete,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests;

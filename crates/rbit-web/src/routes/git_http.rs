@@ -1,0 +1,566 @@
+//! Git smart-HTTP protocol endpoints.
+//!
+//! Authentication is HTTP Basic: username or email + password, or any username + a
+//! personal access token (`rbit_…`, or the legacy `rit_…`) whose scope caps what the request
+//! may do. Cookies are ignored here.
+//! Suspended users are refused whichever credential they present.
+//! Anonymous users may fetch public repositories, unless the instance requires signing in.
+//! When access is missing the server
+//! answers `401` with a `WWW-Authenticate` challenge so Git prompts for credentials.
+//!
+//! Credentials are throttled per client address and per login (`429` + `Retry-After`).
+//! Password-work saturation/shutdown is `503` + `Retry-After`, without a new challenge.
+//! Accounts with two-factor authentication must use a personal access token: their
+//! password is refused with an explanation Git prints (`fatal: remote error: …`).
+//! A repository's old `owner/name` from before a rename or transfer is served as the
+//! repository itself, so remotes configured with it keep working.
+//! Pushes to pull mirrors are refused (`403`): a mirror only changes by fetching its
+//! upstream. Every other push passes the push gate ([`push_gate`]: branch protection
+//! reads the command list before git starts) after those checks.
+//!
+//! Every request that runs git takes a slot of the Git process limit it shares with SSH
+//! (`[repository] max_git_processes`, `503` when full) and of its client address
+//! (`max_git_requests_per_ip`, `429`), both with `Retry-After`. An exchange is stopped when
+//! no bytes move either way for `git_idle_timeout_seconds`, or after `git_max_seconds`.
+//!
+//! A workflow task's token (`rbat_…`, as the Basic password or a Bearer token) is a caller
+//! kind of its own (`docs/design/actions.md` §11.3): it fetches its own repository at its
+//! granted level and other public ones, pushes only to its own with `contents: write`, is
+//! re-checked on every request (the task must still run), and never starts runs. Its
+//! pushes are judged like a deploy key's under branch protection and may not move or
+//! delete existing tags or bring commits that change workflow files. With Actions disabled
+//! a task token is refused before anything is looked up.
+
+mod advertisement;
+pub use advertisement::info_refs;
+mod denied;
+pub(super) use denied::Denied;
+pub(crate) use denied::mirror_forbidden;
+mod repositories;
+use denied::TOKEN_REQUIRED;
+use repositories::CallerRepositories;
+
+use async_compression::tokio::bufread::GzipDecoder;
+use axum::{
+    body::Body,
+    extract::{Path, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
+};
+use futures_util::TryStreamExt;
+use rbit_auth::AccessTokenSecret;
+use rbit_core::{PushSource, TokenScope, User};
+use rbit_services::{
+    ConcurrencySlot, RepoContext, ServiceError, ThrottleScope,
+    actions::tokens::TaskGrant,
+    limits::{RETRY_AFTER_SECONDS, Refused},
+    protection::PushActor,
+    two_factor::GitPasswordOutcome,
+};
+use rbit_transport::{
+    ReceiveOptions, Service, pkt_line,
+    receive::{self, CommandLimits, Intercept, Remaining},
+    refused_push::{PushRefusal, push_refusal},
+    smart_http::{self, NO_CACHE, access, credentials},
+};
+use std::sync::Arc;
+use tokio::io::{AsyncRead, BufReader};
+use tokio_util::io::StreamReader;
+
+use crate::{
+    AppState,
+    client_ip::Client,
+    supervise::{Activity, StreamLimits, Watched, supervised_body},
+};
+
+/// A slot of the Git process limits for this client (refusals answer with [`busy`]).
+fn admit(state: &AppState, client: &Client) -> Result<ConcurrencySlot, Refused> {
+    state.services.git_processes.try_acquire(client.ip()).inspect_err(|refused| {
+        tracing::debug!(ip = ?client.ip(), %refused, "Git request refused");
+    })
+}
+
+/// `503` when the instance is busy, `429` when the client holds its share; both with
+/// `Retry-After`.
+fn busy(refused: Refused) -> Response {
+    let status = match refused {
+        Refused::Busy => StatusCode::SERVICE_UNAVAILABLE,
+        Refused::TooManyFromClient => StatusCode::TOO_MANY_REQUESTS,
+    };
+    (status, [(header::RETRY_AFTER, RETRY_AFTER_SECONDS.to_string())], refused.to_string()).into_response()
+}
+
+/// The idle and total time limits of one exchange.
+fn exchange_limits(state: &AppState) -> StreamLimits {
+    StreamLimits { idle: state.config.repository.git_idle_timeout(), total: state.config.repository.git_max_duration() }
+}
+
+/// `POST /{owner}/{repo}.git/git-upload-pack` (fetch, clone)
+pub async fn upload_pack(state: State<AppState>, path: Path<(String, String)>, client: Client, headers: HeaderMap, body: Body) -> Response {
+    run_service(state, path, client, headers, body, Service::UploadPack).await
+}
+
+/// `POST /{owner}/{repo}.git/git-receive-pack` (push)
+pub async fn receive_pack(
+    state: State<AppState>,
+    path: Path<(String, String)>,
+    client: Client,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    run_service(state, path, client, headers, body, Service::ReceivePack).await
+}
+
+async fn run_service(
+    State(state): State<AppState>,
+    Path((owner, repo)): Path<(String, String)>,
+    client: Client,
+    headers: HeaderMap,
+    body: Body,
+    service: Service,
+) -> Response {
+    let (ctx, caller) = match authorize(&state, &client, &headers, &owner, &repo, service).await {
+        Ok(authorized) => authorized,
+        Err(denied) => return denied.into_response(),
+    };
+    // Held by the response stream until git is done or the exchange is stopped.
+    let slot = match admit(&state, &client) {
+        Ok(slot) => slot,
+        Err(refused) => return busy(refused),
+    };
+
+    // Uploaded bytes count as activity, and a stalled upload fails (the push gate included).
+    let activity = Activity::start(exchange_limits(&state));
+    let request: Request = Box::new(Watched::new(request_reader(&headers, body, service), activity.clone()));
+    // The push gate runs on the resolved repository, after the access and mirror checks.
+    let (request, options) = if service.is_write() {
+        match push_gate(&state, &ctx, caller.as_ref(), request).await {
+            Gate::Pass(request, options) => (request, options),
+            Gate::Answer(response) => return response,
+        }
+    } else {
+        (request, ReceiveOptions::default())
+    };
+
+    // Taken after the verdict and before git starts, so the push's ref updates can be
+    // reported afterwards. `authorize` admits no anonymous push, so every push has a caller.
+    let pending = match &caller {
+        Some(caller) if service.is_write() => Some(state.services.pushes.begin(&ctx, caller.push_source()).await),
+        _ => None,
+    };
+    let slot = Arc::new(slot);
+    let session =
+        match state.transport.serve_with_guard(service, &ctx.disk_path, git_protocol(&headers), options, request, Arc::clone(&slot)) {
+            Ok(session) => session,
+            Err(error) => {
+                tracing::error!(%error, %owner, %repo, %service, "failed to start git");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+
+    if let Some(pending) = pending {
+        let recorder = state.services.pushes.clone();
+        tokio::spawn(async move {
+            if session_succeeded(session.completion).await {
+                recorder.complete(pending).await;
+            }
+        });
+    }
+
+    let mut response = supervised_body(session.output, slot, activity).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(&service.result_content_type()).expect("static content type"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(NO_CACHE));
+    response
+}
+
+type Request = Box<dyn AsyncRead + Send + Unpin>;
+
+/// What the push gate decided about a receive-pack request.
+enum Gate {
+    /// Run git on this input (the command list replayed, then the rest) with these options.
+    Pass(Request, ReceiveOptions),
+    /// Answer without starting git: a refusal report, or an error.
+    Answer(Response),
+}
+
+/// Reads the push's command list before git does and lets branch protection decide
+/// (`docs/design/milestone-2b.md` §4). A refused push is answered all-or-nothing, like a
+/// declining `pre-receive` hook: with the client's report (`ng <ref> <reason>`) or, for
+/// clients that asked for none, `403` and a text explanation.
+async fn push_gate(state: &AppState, ctx: &RepoContext, caller: Option<&GitCaller>, request: Request) -> Gate {
+    let (commands, input) = match receive::intercept(request, CommandLimits::default()).await {
+        Ok(Intercept::Unread(request)) => return Gate::Pass(request, ReceiveOptions::default()),
+        Ok(Intercept::Read { commands, input }) => (commands, input),
+        Err(error) => {
+            return Gate::Answer((StatusCode::BAD_REQUEST, error.to_string()).into_response());
+        }
+    };
+    // Actions: S. A task pushes like a deploy key: never an allowed pusher, never a bypass.
+    let task = matches!(caller, Some(GitCaller::Task(_)));
+    let actor = PushActor { user: caller.and_then(GitCaller::user), deploy_key: task, access: ctx.access };
+    let verdict = match state.services.protection.check_push(ctx, &actor, &commands.updates()).await {
+        Ok(verdict) => verdict,
+        Err(error) => {
+            tracing::error!(%error, repo = %ctx.repo.full_name(), "push gate failed");
+            return Gate::Answer(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    };
+    if !verdict.is_refused() {
+        let options = ReceiveOptions { deny_non_fast_forwards: verdict.deny_non_fast_forwards };
+        if task {
+            return task_push_gate(state, ctx, &commands, input, options).await;
+        }
+        return Gate::Pass(Box::new(input), options);
+    }
+    receive::drain(input).await;
+    refused(&commands, &verdict.refusals)
+}
+
+/// The answer to a refused push: the client's report (`ng <ref> <reason>`), or `403` and a
+/// text explanation for clients that asked for none.
+fn refused(commands: &receive::CommandList, refusals: &[receive::Refusal]) -> Gate {
+    match push_refusal(commands, refusals) {
+        PushRefusal::Explanation(message) => Gate::Answer((StatusCode::FORBIDDEN, message).into_response()),
+        PushRefusal::Report(report) => {
+            let content_type = Service::ReceivePack.result_content_type();
+            Gate::Answer(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, NO_CACHE.to_owned())], report).into_response())
+        }
+    }
+}
+
+// Actions: S.
+/// A task's push, after branch protection: spooled to disk so its new commits are seen
+/// before git stores anything, refused when it moves a tag or changes workflow files,
+/// replayed to git otherwise.
+async fn task_push_gate(
+    state: &AppState,
+    ctx: &RepoContext,
+    commands: &receive::CommandList,
+    input: receive::Replay<Request>,
+    options: ReceiveOptions,
+) -> Gate {
+    let Some(actions) = &state.services.actions else {
+        return Gate::Answer(Denied::Forbidden.into_response());
+    };
+    let pack = input.remaining() == Remaining::ToEnd;
+    let offset = u64::try_from(input.pending().len()).unwrap_or(u64::MAX);
+    let spooled = match actions.spool_task_push(input, offset).await {
+        Ok(spooled) => spooled,
+        Err(ServiceError::Invalid(message)) => {
+            return Gate::Answer((StatusCode::PAYLOAD_TOO_LARGE, message).into_response());
+        }
+        Err(error) => {
+            tracing::error!(%error, repo = %ctx.repo.full_name(), "task push could not be spooled");
+            return Gate::Answer(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    };
+    match actions.task_push_refusals(ctx, &commands.updates(), &spooled, pack).await {
+        Ok(refusals) if !refusals.is_empty() => return refused(commands, &refusals),
+        Ok(_) => {}
+        Err(ServiceError::Invalid(message)) => {
+            return Gate::Answer((StatusCode::BAD_REQUEST, message).into_response());
+        }
+        Err(error) => {
+            tracing::error!(%error, repo = %ctx.repo.full_name(), "task push could not be checked");
+            return Gate::Answer(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    }
+    match spooled.replay().await {
+        Ok(reader) => Gate::Pass(Box::new(reader), options),
+        Err(error) => {
+            tracing::error!(%error, repo = %ctx.repo.full_name(), "task push could not be replayed");
+            Gate::Answer(StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
+    }
+}
+
+async fn session_succeeded(completion: tokio::sync::oneshot::Receiver<std::process::ExitStatus>) -> bool {
+    completion.await.is_ok_and(|status| status.success())
+}
+
+/// Streams the request body, transparently decompressing `Content-Encoding: gzip`
+/// (which Git uses for large negotiation requests). A fetch, open to anyone on a public
+/// repository, inflates to at most [`smart_http::MAX_INFLATED_REQUEST_BYTES`]; a push is
+/// signed in and bounded by the push limits.
+fn request_reader(headers: &HeaderMap, body: Body, service: Service) -> Request {
+    let stream = body.into_data_stream().map_err(std::io::Error::other);
+    let reader = StreamReader::new(stream);
+    let gzipped = headers.get(header::CONTENT_ENCODING).is_some_and(|v| smart_http::is_gzip(v.as_bytes()));
+    if !gzipped {
+        return Box::new(reader);
+    }
+    let inflated = GzipDecoder::new(BufReader::new(reader));
+    if service.is_write() {
+        Box::new(inflated)
+    } else {
+        Box::new(smart_http::Capped::new(inflated, smart_http::MAX_INFLATED_REQUEST_BYTES))
+    }
+}
+
+fn git_protocol(headers: &HeaderMap) -> Option<&str> {
+    headers.get(smart_http::GIT_PROTOCOL_HEADER).and_then(|v| v.to_str().ok())
+}
+
+/// A ref advertisement consisting of a single `ERR` packet ([`pkt_line::error`]).
+fn remote_error(service: Service, message: &str) -> Response {
+    let packet = pkt_line::error(message);
+    ([(header::CONTENT_TYPE, service.advertisement_content_type()), (header::CACHE_CONTROL, NO_CACHE.to_owned())], packet).into_response()
+}
+
+/// Who is making a Git request, and how far their credential reaches.
+#[derive(Debug)]
+pub(super) enum GitCaller {
+    User {
+        user: User,
+        /// `Some` when authenticated with a personal access token, whose scope caps access.
+        /// Password authentication carries the user's full access.
+        token_scope: Option<TokenScope>,
+        /// A scoped token's limit (agent plan step 4.8): one repository, pushes only with `push`.
+        token_limit: Option<rbit_services::tokens::TokenLimit>,
+    },
+    // Actions: S.
+    /// A running workflow task, by its token (`docs/design/actions.md` §11.3).
+    Task(TaskGrant),
+}
+
+impl GitCaller {
+    /// The signed-in user; `None` for a task.
+    pub(super) fn user(&self) -> Option<&User> {
+        match self {
+            Self::User { user, .. } => Some(user),
+            Self::Task(_) => None,
+        }
+    }
+
+    /// The user, owned; `None` for a task.
+    pub(super) fn into_user(self) -> Option<User> {
+        match self {
+            Self::User { user, .. } => Some(user),
+            Self::Task(_) => None,
+        }
+    }
+
+    /// The personal access token's scope, when that is the credential.
+    pub(super) fn token_scope(&self) -> Option<TokenScope> {
+        match self {
+            Self::User { token_scope, .. } => *token_scope,
+            Self::Task(_) => None,
+        }
+    }
+
+    /// Where a push by this caller comes from. A task's pushes are [`PushSource::Task`],
+    /// so they start no runs (§11.5).
+    pub(super) fn push_source(&self) -> PushSource {
+        match self {
+            Self::User { user, .. } => PushSource::User(user.id()),
+            Self::Task(grant) => PushSource::Task(grant.task),
+        }
+    }
+}
+
+/// Resolves credentials and checks that they grant `service` on the repository
+/// ([`access::authorize`] decides the order and the refusals). Returns the repository and
+/// the authenticated caller, if any.
+async fn authorize(
+    state: &AppState,
+    client: &Client,
+    headers: &HeaderMap,
+    owner: &str,
+    repo: &str,
+    service: Service,
+) -> Result<(RepoContext, Option<GitCaller>), Denied> {
+    let caller = authenticate(state, client, headers).await?;
+    // An instance that requires signing in serves no anonymous fetches, public or not.
+    if caller.is_none() && state.services.instance.require_sign_in() {
+        return Err(Denied::Challenge);
+    }
+    let gate = CallerRepositories { state, caller: caller.as_ref() };
+    let ctx = access::authorize(&gate, caller.is_none(), owner, repo, service).await?;
+    if let Some(GitCaller::User { token_limit: Some(limit), .. }) = &caller {
+        // Another repository is not there for a limited token, as over the API: a 403 would
+        // say it exists.
+        if !limit.reaches(ctx.repo.repo.id) {
+            return Err(Denied::NotFound);
+        }
+        if service == Service::ReceivePack && !limit.allows(rbit_services::tokens::Right::Push) {
+            return Err(Denied::Forbidden);
+        }
+    }
+    Ok((ctx, caller))
+}
+
+/// `Ok(None)` for anonymous requests; a challenge for wrong credentials.
+/// A password that looks like a personal access token is checked as one, never as a password.
+pub(super) async fn authenticate(state: &AppState, client: &Client, headers: &HeaderMap) -> Result<Option<GitCaller>, Denied> {
+    // Actions: S. A task token may also come as `Authorization: Bearer rbat_…`.
+    if let Some(token) = bearer_task_token(headers) {
+        return authenticate_task(state, client, token).await.map(Some);
+    }
+    let Some((login, password)) = basic_credentials(headers) else {
+        return Ok(None);
+    };
+    // Actions: foundation (F). A task token is never tried as a password. No task token is
+    // valid while Actions is disabled, so it is refused before anything is looked up.
+    if rbit_core::actions::looks_like_task_token(&password) {
+        return authenticate_task(state, client, &password).await.map(Some);
+    }
+    if AccessTokenSecret::looks_like_token(&password) {
+        // Tokens are unguessable, but a client spraying them still spends its budget.
+        let ip = client.ip().map(|ip| ip.to_canonical().to_string()).unwrap_or_default();
+        if let Err(ServiceError::RateLimited { retry_after_seconds }) = state.services.throttle.check_client(ThrottleScope::GitAuth, &ip) {
+            return Err(Denied::RateLimited { retry_after_seconds });
+        }
+        // The token identifies its owner on its own; Git's username is ignored.
+        return match state.services.tokens.authenticate_limited(&password).await {
+            Ok(Some((user, scope, token_limit, _))) => Ok(Some(GitCaller::User { user, token_scope: Some(scope), token_limit })),
+            Ok(None) => {
+                state.services.throttle.record_client_failure(ThrottleScope::GitAuth, &ip);
+                Err(Denied::Challenge)
+            }
+            Err(error) => {
+                tracing::error!(%error, "git token authentication failed");
+                Err(Denied::Internal)
+            }
+        };
+    }
+    match state.services.authenticate_git_password(&login, password, &client.0).await {
+        Ok(GitPasswordOutcome::Authenticated(user)) => Ok(Some(GitCaller::User { user, token_scope: None, token_limit: None })),
+        Ok(GitPasswordOutcome::TokenRequired) => Err(Denied::TokenRequired),
+        Err(ServiceError::InvalidCredentials) => Err(Denied::Challenge),
+        Err(ServiceError::Forbidden) => Err(Denied::Suspended),
+        Err(ServiceError::RateLimited { retry_after_seconds }) => Err(Denied::RateLimited { retry_after_seconds }),
+        Err(ServiceError::Unavailable { retry_after_seconds }) => Err(Denied::Unavailable { retry_after_seconds }),
+        Err(error) => {
+            tracing::error!(%error, "git authentication failed");
+            Err(Denied::Internal)
+        }
+    }
+}
+
+// Actions: S.
+/// A task token: only while Actions is enabled and only while its task runs. Runners often
+/// share the server's address, so task tokens have a budget of their own per address
+/// (`task:<address>`), which only wrong ones spend.
+async fn authenticate_task(state: &AppState, client: &Client, token: &str) -> Result<GitCaller, Denied> {
+    let Some(actions) = &state.services.actions else {
+        return Err(Denied::Challenge);
+    };
+    let ip = client.ip().map(|ip| format!("task:{}", ip.to_canonical())).unwrap_or_default();
+    if let Err(ServiceError::RateLimited { retry_after_seconds }) =
+        state.services.throttle.check_client_failures(ThrottleScope::GitAuth, &ip)
+    {
+        return Err(Denied::RateLimited { retry_after_seconds });
+    }
+    match actions.authenticate_task(token).await {
+        Ok(Some(grant)) => Ok(GitCaller::Task(grant)),
+        Ok(None) => {
+            state.services.throttle.record_client_failure(ThrottleScope::GitAuth, &ip);
+            Err(Denied::Challenge)
+        }
+        Err(error) => {
+            tracing::error!(%error, "git task token authentication failed");
+            Err(Denied::Internal)
+        }
+    }
+}
+
+/// A task token sent as `Authorization: Bearer` ([`credentials::bearer_task_token`]).
+fn bearer_task_token(headers: &HeaderMap) -> Option<&str> {
+    credentials::bearer_task_token(headers.get(header::AUTHORIZATION)?.to_str().ok()?)
+}
+
+/// `Authorization: Basic` ([`credentials::basic_credentials`]).
+fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
+    credentials::basic_credentials(headers.get(header::AUTHORIZATION)?.to_str().ok()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_basic_credentials() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic YWxpY2U6czNjcjN0OndpdGg6Y29sb25z"));
+        assert_eq!(basic_credentials(&headers), Some(("alice".into(), "s3cr3t:with:colons".into())));
+    }
+
+    #[tokio::test]
+    async fn remote_errors_are_single_err_packets() {
+        let response = remote_error(Service::UploadPack, "use a token");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/x-git-upload-pack-advertisement");
+        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], b"0014ERR use a token\n");
+    }
+
+    #[tokio::test]
+    async fn pushes_to_mirrors_are_forbidden_with_an_explanation() {
+        let response = Denied::Mirror.into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], denied::mirror_forbidden().as_bytes());
+        assert!(String::from_utf8_lossy(&body).contains("[repository_mirror]"));
+    }
+
+    #[test]
+    fn users_push_as_themselves() {
+        let user = User {
+            is_agent: false,
+            agent_owner_id: None,
+            account: rbit_core::Account {
+                id: rbit_core::AccountId(5),
+                kind: rbit_core::AccountKind::User,
+                name: "alice".parse().unwrap(),
+                display_name: None,
+                bio: None,
+                created_at: rbit_core::Timestamp(1_792_022_400),
+            },
+            email: "alice@example.com".parse().unwrap(),
+            is_admin: false,
+        };
+        for token_scope in [None, Some(TokenScope::Write)] {
+            let caller = GitCaller::User { user: user.clone(), token_scope, token_limit: None };
+            assert_eq!(caller.push_source(), PushSource::User(rbit_core::AccountId(5)));
+        }
+    }
+
+    // Actions: S.
+    #[test]
+    fn tasks_push_as_tasks_and_may_send_a_bearer_token() {
+        use rbit_core::actions::{JobId, PermissionLevel, RunId, TaskId, TokenPermissions};
+        let grant = TaskGrant {
+            task: TaskId(9),
+            job: JobId(1),
+            run: RunId(1),
+            repo: rbit_core::RepoId(1),
+            permissions: TokenPermissions::uniform(PermissionLevel::Write),
+        };
+        let caller = GitCaller::Task(grant);
+        assert_eq!((caller.push_source(), caller.user().is_none(), caller.token_scope()), (PushSource::Task(TaskId(9)), true, None));
+        let mut headers = HeaderMap::new();
+        let token = format!("rbat_{}", "A".repeat(43));
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {token}")).unwrap());
+        assert_eq!(bearer_task_token(&headers), Some(token.as_str()));
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer rbit_personal"));
+        assert_eq!(bearer_task_token(&headers), None, "personal access tokens stay Basic passwords on Git");
+    }
+
+    #[test]
+    fn refused_slots_carry_retry_after() {
+        let busy_instance = busy(Refused::Busy);
+        assert_eq!(busy_instance.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(busy_instance.headers()[header::RETRY_AFTER], RETRY_AFTER_SECONDS.to_string().as_str());
+        let busy_client = busy(Refused::TooManyFromClient);
+        assert_eq!(busy_client.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(busy_client.headers().contains_key(header::RETRY_AFTER));
+    }
+
+    #[test]
+    fn throttled_credentials_carry_retry_after() {
+        let response = Denied::RateLimited { retry_after_seconds: 12 }.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "12");
+    }
+}

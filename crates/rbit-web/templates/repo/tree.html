@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+<div class="grid gap-8 lg:grid-cols-[minmax(0,1fr)_16rem]">
+  <div class="min-w-0">
+    {#- Phones: the description and counts above the files; the full sidebar follows the README. -#}
+    {% if breadcrumbs.len() <= 1 %}
+    <section class="mb-4 lg:hidden" aria-label="{{ rbit_localization::RepoBrowseLabel::About.text(page.locale) }}">
+      {% if let Some(description) = header.description %}<p class="text-[13px] text-ink-muted">{{ description }}</p>{% endif %}
+      <p class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
+        <a href="{{ header.branches_url }}" class="flex items-center gap-1.5 hover:text-ink">{% call ui::icon("branch", "size-3.5") %}{% endcall %}<span><span class="font-medium text-ink">{{ switcher.branch_count }}</span> {% call ui::localized(rbit_localization::RepoBrowseMessage::BranchNoun { count: *switcher.branch_count }.text(page.locale)) %}{% endcall %}</span></a>
+        <a href="{{ header.tags_url }}" class="flex items-center gap-1.5 hover:text-ink">{% call ui::icon("tag", "size-3.5") %}{% endcall %}<span><span class="font-medium text-ink">{{ switcher.tag_count }}</span> {% call ui::localized(rbit_localization::RepoBrowseMessage::TagNoun { count: *switcher.tag_count }.text(page.locale)) %}{% endcall %}</span></a>
+        {% if header.is_private %}
+        <span class="flex items-center gap-1.5">{% call ui::icon("lock", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::RepoNavLabel::Private.text(page.locale)) %}{% endcall %}</span>
+        {% else %}
+        <span class="flex items-center gap-1.5">{% call ui::icon("globe", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::RepoNavLabel::Public.text(page.locale)) %}{% endcall %}</span>
+        {% endif %}
+      </p>
+    </section>
+    {% endif %}
+
+    <div class="mb-3 flex min-h-8 flex-wrap items-center gap-2 sm:gap-3">
+      {% include "repo/ref_switcher.html" %}
+      {% if breadcrumbs.len() > 1 %}
+      {% include "repo/breadcrumbs.html" %}
+      {% else %}
+      <a href="{{ header.branches_url }}" class="btn btn-ghost max-sm:hidden">{% call ui::icon("branch", "size-3.5 text-ink-muted") %}{% endcall %}<span><span class="font-medium">{{ switcher.branch_count }}</span> <span class="text-ink-muted">{% call ui::localized(rbit_localization::RepoBrowseMessage::BranchNoun { count: *switcher.branch_count }.text(page.locale)) %}{% endcall %}</span></span></a>
+      <a href="{{ header.tags_url }}" class="btn btn-ghost max-sm:hidden">{% call ui::icon("tag", "size-3.5 text-ink-muted") %}{% endcall %}<span><span class="font-medium">{{ switcher.tag_count }}</span> <span class="text-ink-muted">{% call ui::localized(rbit_localization::RepoBrowseMessage::TagNoun { count: *switcher.tag_count }.text(page.locale)) %}{% endcall %}</span></span></a>
+      {% endif %}
+      <a class="input flex h-8 min-w-0 items-center gap-2 text-[13px] text-ink-muted max-sm:order-last max-sm:w-full sm:ms-auto sm:w-64" href="{{ language_files_url }}" data-repository-file-search data-language-files hx-boost="false" aria-haspopup="dialog" aria-keyshortcuts="T">
+        {% call ui::icon("search", "size-3.5 shrink-0 text-ink-faint") %}{% endcall %}
+        <span class="flex-1 truncate">{% call ui::localized(rbit_localization::RepoBrowseLabel::GoToFile.text(page.locale)) %}{% endcall %}</span>
+        <kbd dir="ltr" class="hidden rounded border border-line px-1.5 font-mono text-[11px] leading-4 text-ink-faint sm:block" aria-hidden="true">t</kbd>
+      </a>
+      {% if let Some(url) = new_file_url %}<a href="{{ url }}" class="btn">{% call ui::icon("plus", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::RepoBrowseLabel::AddFile.text(page.locale)) %}{% endcall %}</a>{% endif %}
+      {% if let Some(url) = upload_url %}<a href="{{ url }}" class="btn btn-icon" aria-label="{{ rbit_localization::RepoBrowseLabel::UploadFiles.text(page.locale) }}" title="{{ rbit_localization::RepoBrowseLabel::UploadFiles.text(page.locale) }}">{% call ui::icon("upload", "size-3.5") %}{% endcall %}</a>{% endif %}
+    </div>
+
+    {% if let Some(url) = fork_sync_url %}
+    <div hidden hx-get="{{ url }}" hx-trigger="load" hx-swap="outerHTML"></div>
+    <noscript><a class="btn mb-3" href="{{ url }}">{% call ui::localized(rbit_localization::RepoBrowseLabel::SyncFork.text(page.locale)) %}{% endcall %}</a></noscript>
+    {% endif %}
+    {#- Only very large directories need paging or a name filter; "Go to file" covers the rest. -#}
+    {% if pagination.pages > 1 || !pagination.query.is_empty() %}{% include "repo/listing_controls.html" %}{% endif %}
+    <section class="box overflow-hidden" aria-label="{{ rbit_localization::RepoBrowseLabel::Files.text(page.locale) }}">
+      <div class="box-header text-[13px]">
+        {% call ui::avatar(latest.avatar, "size-5 text-[9px]") %}{% endcall %}
+        <span class="shrink-0 font-medium">{{ latest.author }}</span>
+        <a href="{{ latest.url }}" class="min-w-0 flex-1 truncate text-ink-muted hover:text-ink" title="{{ latest.summary }}">{{ latest.summary }}</a>
+        <a href="{{ latest.url }}" class="hidden shrink-0 font-mono text-xs text-ink-faint hover:text-ink sm:inline" dir="ltr">{{ latest.short_id }}</a>
+        <time class="shrink-0 text-xs text-ink-faint" datetime="{{ latest.when_iso }}" title="{{ latest.when_iso }}">{% call ui::localized(latest.when.relative(page.locale)) %}{% endcall %}</time>
+        {#- Counting walks the whole history, so it arrives after first paint. -#}
+        <a href="{{ history_url }}" class="flex shrink-0 items-center gap-1.5 text-xs text-ink-muted hover:text-ink" hx-get="{{ commit_count_url }}" hx-trigger="load" hx-swap="outerHTML">{% call ui::icon("history", "size-3.5") %}{% endcall %}<span class="max-sm:sr-only">{% call ui::localized(rbit_localization::RepoBrowseLabel::History.text(page.locale)) %}{% endcall %}</span></a>
+      </div>
+      {#- A table by role, laid out with flex rows: each row's cells line up under the column
+          headers (name two fifths from md on, message flexible, date at the end), and the
+          message column, like its header, appears from md on. -#}
+      <div role="table" aria-label="{{ rbit_localization::RepoBrowseLabel::Files.text(page.locale) }}">
+        <div role="row" class="row min-h-9 text-xs font-medium text-ink-muted">
+          <span role="columnheader" class="min-w-0 flex-1 truncate md:w-2/5 md:flex-none">{% call ui::localized(rbit_localization::RepoBrowseLabel::NameColumn.text(page.locale)) %}{% endcall %}</span>
+          <span role="columnheader" class="hidden min-w-0 flex-1 truncate md:block">{% call ui::localized(rbit_localization::RepoBrowseLabel::LastCommitMessageColumn.text(page.locale)) %}{% endcall %}</span>
+          <span role="columnheader" class="ms-auto shrink-0 text-end">{% call ui::localized(rbit_localization::RepoBrowseLabel::LastCommitDateColumn.text(page.locale)) %}{% endcall %}</span>
+        </div>
+        {% if let Some(parent) = parent_url %}
+        <div role="row" class="row row-link relative">
+          <span role="cell" class="min-w-0 flex-1"><a href="{{ parent }}" class="font-mono text-[13px] text-ink-muted after:absolute after:inset-0" dir="ltr" aria-label="{{ rbit_localization::RepoBrowseLabel::ParentDirectory.text(page.locale) }}">..</a></span>
+        </div>
+        {% endif %}
+        {#- The name link stretches over the whole row (`after:inset-0`); the commit link
+            sits above it (`z-10`) so both are clickable without nesting anchors. The commit
+            cells arrive out of band (repo/entry_commits.html) into each row's slot. -#}
+        {% for entry in entries %}
+        <div role="row" class="row row-link relative">
+          <span role="cell" class="flex min-w-0 flex-1 md:w-2/5 md:flex-none">
+            <a href="{{ entry.url }}" class="group flex min-w-0 flex-1 items-center gap-3 after:absolute after:inset-0">
+              {% if entry.is_directory %}
+                {% call ui::icon("folder", "size-4 shrink-0 fill-current text-ink-muted") %}{% endcall %}
+              {% else if entry.is_submodule %}
+                {% call ui::icon("link", "size-4 shrink-0 text-ink-faint") %}{% endcall %}
+              {% else %}
+                {% call ui::icon("file", "size-4 shrink-0 text-ink-faint") %}{% endcall %}
+              {% endif %}
+              <span class="truncate text-[13px] group-hover:underline group-hover:underline-offset-4">{{ entry.name }}</span>
+            </a>
+          </span>
+          <span id="{{ entry.commit_slot }}" class="contents"></span>
+        </div>
+        {% endfor %}
+      </div>
+      {% if !entries.is_empty() %}
+      <div hidden hx-get="{{ entry_commits_url }}" hx-trigger="load" hx-swap="outerHTML"></div>
+      {% endif %}
+    </section>
+
+    {% include "repo/documents.html" %}
+  </div>
+
+  <aside class="repo-aside {% if breadcrumbs.len() > 1 %}max-lg:hidden{% endif %}">
+    <section class="hidden lg:block">
+      <h2 class="text-[13px] font-medium">{% call ui::localized(rbit_localization::RepoBrowseLabel::About.text(page.locale)) %}{% endcall %}</h2>
+      {% if let Some(description) = header.description %}
+      <p class="mt-2 text-[13px] text-ink-muted">{{ description }}</p>
+      {% else %}
+      <p class="mt-2 text-[13px] text-ink-faint">{% call ui::localized(rbit_localization::RepoBrowseLabel::NoDescription.text(page.locale)) %}{% endcall %}</p>
+      {% endif %}
+    </section>
+    {% include "repo/document_links.html" %}
+    {% if let Some(release) = latest_release %}
+    <section class="aside-section" aria-labelledby="latest-release-title">
+      <h2 id="latest-release-title" class="text-[13px] font-medium"><a href="{{ release.releases_url }}" class="hover:underline hover:underline-offset-4">{% call ui::localized(rbit_localization::RepoNavLabel::Releases.text(page.locale)) %}{% endcall %}</a></h2>
+      <a href="{{ release.url }}" class="group mt-2 flex items-start gap-2 text-[13px]">
+        {% call ui::icon("tag", "mt-0.5 size-3.5 shrink-0 text-ink-muted") %}{% endcall %}
+        <span class="min-w-0">
+          <span class="flex items-center gap-2"><span class="truncate font-medium group-hover:underline group-hover:underline-offset-4">{{ release.name }}</span><span class="badge">{% call ui::localized(rbit_localization::RepoBrowseLabel::Latest.text(page.locale)) %}{% endcall %}</span></span>
+          <time class="block text-xs text-ink-faint" datetime="{{ release.when_iso }}">{% call ui::localized(release.when.relative(page.locale)) %}{% endcall %}</time>
+        </span>
+      </a>
+    </section>
+    {% endif %}
+    {% if let Some(collaborator) = collaborator %}
+    <section class="aside-section" aria-labelledby="your-access-title">
+      <h2 id="your-access-title" class="text-[13px] font-medium">{% call ui::localized(rbit_localization::RepoBrowseLabel::YourAccess.text(page.locale)) %}{% endcall %}</h2>
+      <p class="mt-2 text-[13px] text-ink-muted">{% call ui::localized(rbit_localization::RepoBrowseMessage::CollaboratorAccess { permission: collaborator.permission_label }.text(page.locale)) %}{% endcall %}</p>
+      <form method="post" action="{{ collaborator.leave_url }}" class="mt-3">
+        <button class="btn" type="submit">{% call ui::localized(rbit_localization::RepoBrowseLabel::LeaveRepository.text(page.locale)) %}{% endcall %}</button>
+      </form>
+    </section>
+    {% endif %}
+    {% if let Some(languages) = languages %}
+    <section class="aside-section" aria-labelledby="languages-title">
+      <h2 id="languages-title" class="text-[13px] font-medium">{% call ui::localized(rbit_localization::RepoBrowseLabel::Languages.text(page.locale)) %}{% endcall %}</h2>
+      <div class="mt-3 overflow-hidden rounded-full">
+        <svg class="block h-2 w-full" viewBox="0 0 100 1" preserveAspectRatio="none" role="img" aria-label="{{ languages.label }}">
+          {%- for segment in languages.segments %}<rect x="{{ segment.x }}" width="{{ segment.width }}" height="1" fill="{{ segment.color }}"><title>{{ segment.name }} {{ segment.percent }}</title></rect>{% endfor -%}
+        </svg>
+      </div>
+      <ul class="mt-2.5 flex flex-wrap gap-x-4 text-xs">
+        {% for segment in languages.segments %}
+        <li class="flex items-center gap-1.5">
+          <svg class="size-2 shrink-0" viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="{{ segment.color }}"/></svg>
+          <button type="button" class="inline-flex min-h-6 cursor-pointer items-center font-medium text-ink hover:underline hover:underline-offset-4" data-language-files data-language-files-url="{{ language_files_url }}&amp;language={{ segment.name|urlencode }}" hx-boost="false" aria-haspopup="dialog">{{ segment.name }}</button>
+          <span class="text-ink-muted">{{ segment.percent }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+    <nav class="space-y-2 text-[13px] text-ink-muted" aria-label="{{ rbit_localization::RepoBrowseLabel::RepositoryLinks.text(page.locale) }}">
+      <a href="{{ history_url }}" class="flex items-center gap-2 hover:text-ink">{% call ui::icon("history", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::RepoBrowseLabel::CommitHistory.text(page.locale)) %}{% endcall %}</a>
+      <a href="{{ header.releases_url }}" class="flex items-center gap-2 hover:text-ink">{% call ui::icon("tag", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::RepoNavLabel::Releases.text(page.locale)) %}{% endcall %}</a>
+      <a href="{{ header.forks_url }}" class="flex items-center gap-2 hover:text-ink">{% call ui::icon("git-fork", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::RepoNavMessage::ForkCount { count: *header.fork_count }.text(page.locale)) %}{% endcall %}</a>
+    </nav>
+    <dl class="hidden space-y-2 border-t border-line pt-5 text-[13px] text-ink-muted lg:block">
+      <div class="flex items-center gap-2">{% call ui::icon("branch", "size-3.5") %}{% endcall %}<dt class="sr-only">{% call ui::localized(rbit_localization::RepoNavLabel::Branches.text(page.locale)) %}{% endcall %}</dt><dd><a href="{{ header.branches_url }}" class="hover:text-ink hover:underline"><span class="text-ink">{{ switcher.branch_count }}</span> {% call ui::localized(rbit_localization::RepoBrowseMessage::BranchNoun { count: *switcher.branch_count }.text(page.locale)) %}{% endcall %}</a></dd></div>
+      <div class="flex items-center gap-2">{% call ui::icon("tag", "size-3.5") %}{% endcall %}<dt class="sr-only">{% call ui::localized(rbit_localization::RepoNavLabel::Tags.text(page.locale)) %}{% endcall %}</dt><dd><a href="{{ header.tags_url }}" class="hover:text-ink hover:underline"><span class="text-ink">{{ switcher.tag_count }}</span> {% call ui::localized(rbit_localization::RepoBrowseMessage::TagNoun { count: *switcher.tag_count }.text(page.locale)) %}{% endcall %}</a></dd></div>
+      {% if header.is_private %}
+      <div class="flex items-center gap-2">{% call ui::icon("lock", "size-3.5") %}{% endcall %}<dt class="sr-only">{% call ui::localized(rbit_localization::RepoBrowseLabel::Visibility.text(page.locale)) %}{% endcall %}</dt><dd>{% call ui::localized(rbit_localization::RepoNavLabel::Private.text(page.locale)) %}{% endcall %}</dd></div>
+      {% else %}
+      <div class="flex items-center gap-2">{% call ui::icon("globe", "size-3.5") %}{% endcall %}<dt class="sr-only">{% call ui::localized(rbit_localization::RepoBrowseLabel::Visibility.text(page.locale)) %}{% endcall %}</dt><dd>{% call ui::localized(rbit_localization::RepoNavLabel::Public.text(page.locale)) %}{% endcall %}</dd></div>
+      {% endif %}
+    </dl>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,134 @@
+# Native release delivery. Dispatch on an existing version tag; default is a rehearsal.
+# Requires the same Linux toolchain as ci.yml. Publication additionally needs the
+# protected `release` environment documented in docs/independent-releases.md.
+name: Native release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Sign and publish the tested archives to this rbit instance
+        type: boolean
+        default: false
+      containers:
+        description: Also publish native Linux images to the configured registry
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "4"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  RELEASE_TAG: ${{ github.ref_name }}
+  RELEASE_SHA: ${{ github.sha }}
+
+jobs:
+  candidate:
+    name: Test and package native release
+    runs-on: linux
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-tags: true
+      - name: Validate source and release notes
+        run: node scripts/native-release/prepare.mjs
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: git diff --exit-code -- crates/rbit-web/assets
+      - run: cargo fmt --all --check
+      - run: node scripts/rewrite/check.mjs
+      - run: node scripts/rewrite/check-types.mjs
+      - run: npm test
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo nextest run --workspace --locked --no-fail-fast --profile ci
+      - run: cargo test --workspace --doc --locked
+      - name: Licenses and advisories
+        run: |
+          set -eu
+          bash scripts/ci/install-cargo-deny.sh "$RUNNER_TEMP/cargo-deny"
+          "$RUNNER_TEMP/cargo-deny/cargo-deny" --locked check licenses advisories
+      - run: cargo build --release --locked --package rbit-server --package rbit-runner
+      - run: node scripts/release-rehearsal.mjs --candidate target/release/rbit
+      - name: Revalidate the tested source before packaging
+        run: node scripts/native-release/prepare.mjs
+      - name: Package the exact tested binaries
+        run: |
+          set -eu
+          release_target="$(rustc -vV | sed -n 's/^host: //p')"
+          case "$release_target" in x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu) ;; *) echo 'Native delivery requires a supported Linux host'; exit 1;; esac
+          release_version="${RELEASE_TAG#v}"
+          test "$(target/release/rbit --version)" = "rbit $release_version"
+          test "$(target/release/rbit-runner --version)" = "rbit-runner $release_version"
+          release_bundle="rbit-$release_version-$release_target"
+          mkdir -p "native-package/$release_bundle" native-dist
+          cp target/release/rbit target/release/rbit-runner README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md "native-package/$release_bundle/"
+          cp deploy/rbit.example.toml deploy/rbit.service deploy/rbit-runner.example.toml deploy/rbit-runner.service "native-package/$release_bundle/"
+          tar -czf "native-dist/$release_bundle.tar.gz" -C native-package "$release_bundle"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-release-archives
+          path: native-dist/*.tar.gz
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-release-notes
+          path: native-release-notes.md
+          retention-days: 14
+
+  publish:
+    name: Sign and publish native release
+    needs: candidate
+    if: ${{ inputs.publish }}
+    runs-on: linux
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write
+    env:
+      RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release-archives
+          path: native-dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release-notes
+          path: native-notes
+      - name: Sign checksums and source identity
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: node scripts/native-release/cli.mjs sign native-dist
+      - name: Publish verified archives on rbit
+        env:
+          RELEASE_ORIGIN: ${{ github.server_url }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_NOTES_FILE: native-notes/native-release-notes.md
+        run: node scripts/native-release/cli.mjs publish native-dist
+      - name: Publish verified native container images
+        if: ${{ inputs.containers }}
+        env:
+          RELEASE_REGISTRY: ${{ vars.RELEASE_REGISTRY }}
+          RELEASE_NAMESPACE: ${{ vars.RELEASE_NAMESPACE }}
+          RELEASE_REGISTRY_USER: ${{ secrets.RELEASE_REGISTRY_USER }}
+          RELEASE_REGISTRY_PASSWORD: ${{ secrets.RELEASE_REGISTRY_PASSWORD }}
+        run: node scripts/native-release/containers.mjs native-dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-native-release
+          path: native-dist/*
+          retention-days: 14

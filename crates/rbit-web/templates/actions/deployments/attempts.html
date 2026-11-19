@@ -1,0 +1,11 @@
+{% if rows.is_empty() %}<p class="text-sm text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::NoDeployments)) %}{% endcall %}</p>{% endif %}
+{% for row in rows %}<article class="box min-w-0 space-y-3 p-4">
+<h3 class="break-words font-medium">{{ row.environment }} · {{ row.name }}</h3>
+<p class="text-sm">{% let look = row.look %}{% include "actions/state.html" %} {{ look.label }} · {{ row.attempt }}{% if let Some(when) = row.when %} · <time datetime="{{ when.iso() }}">{% call ui::localized(when.relative(page.locale)) %}{% endcall %}</time>{% endif %}</p>
+<dl class="min-w-0 space-y-2 text-xs"><div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsMessage::Commit)) %}{% endcall %}</dt><dd class="break-all font-mono" dir="ltr">{{ row.sha }}</dd></div>
+<div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentWorkflowCommit)) %}{% endcall %}</dt><dd class="break-all font-mono" dir="ltr">{{ row.workflow_sha }}</dd></div>
+{% if let Some((id, digest)) = row.origin_artifact %}<div><dt class="text-ink-muted">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentOriginArtifact)) %}{% endcall %}</dt><dd class="break-all font-mono" dir="ltr">{{ id }} · {{ digest }}</dd></div>{% endif %}</dl>
+<div class="flex flex-wrap gap-2">
+{% if let Some(url) = row.run_url %}<a class="btn min-h-11" href="{{ url }}">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::DeploymentRun)) %}{% endcall %} #{{ row.run_number }}</a>{% endif %}
+{% if let Some(url) = row.observed_url %}<a class="btn min-h-11 max-w-full whitespace-normal break-words" href="{{ url }}" target="_blank" rel="noopener noreferrer">{% call ui::localized(t.get(rbit_localization::ActionsEnvironmentMessage::ObservedLink)) %}{% endcall %}</a>{% endif %}
+</div></article>{% endfor %}

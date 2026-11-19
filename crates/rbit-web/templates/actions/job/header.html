@@ -1,0 +1,63 @@
+<header class="box overflow-hidden">
+  <div class="flex flex-wrap items-start gap-3 p-4 sm:p-5">
+    {% let look = text.look(look) %}
+    <span class="mt-1 rounded-lg border border-line bg-subtle p-2">{% include "actions/state.html" %}</span>
+    <div class="min-w-0 flex-1">
+      <h1 class="break-words text-xl font-semibold tracking-tight sm:text-2xl">{{ name }}</h1>
+      <p class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-muted">
+        <span class="font-medium {{ look.tone }}">{% call ui::localized(look.label) %}{% endcall %}</span>
+        {% if let Some(duration) = duration %}<span aria-hidden="true">·</span><span class="tabular-nums" title="{{ text.duration }}"{% if let Some(started) = ticking %} data-started="{{ started }}"{% endif %}>{% call ui::localized(duration.text(page.locale)) %}{% endcall %}</span>{% endif %}
+        <span aria-hidden="true">·</span><span class="tabular-nums">{% call ui::localized(text.attempt) %}{% endcall %} {{ attempt }}</span>
+        <span aria-hidden="true">·</span><span class="tabular-nums">{% call ui::localized(text.count) %}{% endcall %}</span>
+      </p>
+    </div>
+    <div class="flex w-full flex-wrap gap-2 sm:w-auto">
+      {% if let Some(raw_url) = raw_url %}
+      <a class="btn h-10 sm:h-8" href="{{ raw_url }}" hx-boost="false">
+        {% call ui::icon("file-text", "size-3.5") %}{% endcall %}{% call ui::localized(text.raw_log) %}{% endcall %}
+      </a>
+      <a class="btn h-10 sm:h-8" href="{{ raw_url }}?download=1" hx-boost="false" download>
+        {% call ui::icon("download", "size-3.5") %}{% endcall %}{% call ui::localized(text.download_log) %}{% endcall %}
+      </a>
+      {% endif %}
+      {% if let Some(rerun_url) = rerun_url %}
+      <form method="post" action="{{ rerun_url }}">
+        <button class="btn h-10 sm:h-8" type="submit">
+          {% call ui::icon("refresh", "size-3.5") %}{% endcall %}{% call ui::localized(text.rerun) %}{% endcall %}
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  {% if let Some(failure) = failure %}
+  {#- Where the job failed, as GitHub's annotation: the step and its last error line. -#}
+  <a class="flex min-w-0 items-start gap-2 border-t border-line px-4 py-2.5 text-xs hover:bg-subtle sm:px-5" href="#{{ failure.anchor }}" data-failure>
+    <span class="mt-px shrink-0 text-danger">{% call ui::icon("x", "size-3.5") %}{% endcall %}</span>
+    <span class="min-w-0 break-words"><span class="text-ink-muted">{% call ui::localized(text.failed_step) %}{% endcall %}</span> <span class="font-medium text-ink">{{ failure.step }}</span>{% if let Some(message) = failure.message %}<bdi class="mt-0.5 block font-mono text-danger" dir="ltr">{{ message }}</bdi>{% endif %}</span>
+  </a>
+  {% endif %}
+  <dl class="grid grid-cols-2 gap-4 border-t border-line bg-subtle/40 px-4 py-3 text-xs sm:grid-cols-4 sm:px-5">
+    <div class="min-w-0">
+      <dt class="text-ink-faint">{% call ui::localized(text.runs_on) %}{% endcall %}</dt>
+      <dd class="mt-1 break-words font-mono text-ink-muted"><bdi>{{ labels }}</bdi></dd>
+    </div>
+    {% if let Some(runner) = runner %}
+    <div class="min-w-0">
+      <dt class="text-ink-faint">{% call ui::localized(text.runner) %}{% endcall %}</dt>
+      <dd class="mt-1 break-words font-mono text-ink-muted"><bdi>{{ runner }}</bdi></dd>
+    </div>
+    {% endif %}
+    {% if let Some(queued) = queued %}
+    <div>
+      <dt class="text-ink-faint">{% call ui::localized(text.queued_at) %}{% endcall %}</dt>
+      <dd class="mt-1 text-ink-muted"><time datetime="{{ queued.iso() }}" title="{{ queued.iso() }}">{% call ui::localized(queued.relative(page.locale)) %}{% endcall %}</time></dd>
+    </div>
+    {% endif %}
+    {% if let Some(started) = started %}
+    <div>
+      <dt class="text-ink-faint">{% call ui::localized(text.started_at) %}{% endcall %}</dt>
+      <dd class="mt-1 text-ink-muted"><time datetime="{{ started.iso() }}" title="{{ started.iso() }}">{% call ui::localized(started.relative(page.locale)) %}{% endcall %}</time></dd>
+    </div>
+    {% endif %}
+  </dl>
+</header>

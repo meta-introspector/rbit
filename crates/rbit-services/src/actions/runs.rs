@@ -1,0 +1,501 @@
+//! Creating runs from planned workflows (one transaction: the run and its jobs, then
+//! `pending` statuses), concurrency groups, cancel, re-run, approval and listings.
+//!
+//! * [`ActionsService::start_run`] turns one workflow's answer to an event (a
+//!   [`Candidate`]) into a run. A workflow that failed to parse or plan becomes a
+//!   *workflow error*: a failed run without jobs whose error tells its author why nothing
+//!   ran. The caps of §11.8 apply here: an event starts at most `max_runs_per_event` runs
+//!   and `max_jobs_per_event` jobs ([`Allowance`]), and a repository may have at most
+//!   `max_waiting_jobs_per_repository` jobs waiting — runs beyond that become workflow
+//!   errors saying so.
+//! * Concurrency (§11.6) is applied when a run becomes runnable: on creation for trusted
+//!   runs, on approval for untrusted ones, which therefore cancel nothing while they wait.
+//!   Untrusted runs' groups are namespaced `pr-<number>/`, so they only ever meet runs of
+//!   the same pull request. With `cancel-in-progress` the group's other runs are cancelled;
+//!   without it the new run is held while another run of the group is active, and a run that
+//!   was only held is replaced by the newer one, as on GitHub. Group decisions are made one
+//!   at a time (`Inner::groups`), so two runs created at once cannot both start.
+//! * People act on runs through [`ActionsService::cancel`], [`ActionsService::rerun`] and
+//!   [`ActionsService::approve`]: writers only, and only people — the caller is a `User`,
+//!   so a task token can never cancel, re-run or approve (§11.5). Approvals (and trusting an
+//!   author with them) are audited. Re-running an untrusted run is not approving it: it
+//!   waits again unless its author would skip the wait today.
+//! * [`ActionsService::settled`] follows every transition of a run's jobs: the scheduler's
+//!   version moves when jobs became waiting, the jobs' commit statuses are reported
+//!   ([`super::statuses`]), and a finished run lets the next held run of its group start. The runner protocol calls it after finishing tasks and sweeping.
+//!
+//! Workstream T (triggers and runs) owns this file.
+
+mod creation;
+
+use rbit_actions::{
+    scheduling::{self, Member, Start, requests},
+    trust::{Isolation, RunTrust},
+};
+use rbit_core::{
+    Account, AccountId, IssueNumber, RepoId, Timestamp, User,
+    actions::{PermissionLevel, Run, RunEvent, RunId, Status, TokenPermissions},
+    repository::OwnedRepository,
+};
+pub use rbit_storage::sqlite::actions_runs::Rerun;
+use rbit_storage::sqlite::actions_runs::{NewJob, NewRun, RunStart, Settled};
+use rbit_workflow::{
+    ErrorKind,
+    model::{Permission, Permissions},
+    plan::RunPlan,
+    spec::JobTemplate,
+};
+
+use super::ActionsService;
+use crate::{
+    RepoContext, ServiceError,
+    audit::{AuditAction, AuditEntry, AuditService},
+};
+
+/// Longest stored workflow error, in bytes (the column's CHECK).
+pub const MAX_ERROR_BYTES: usize = 2048;
+/// Longest stored name, title, path or concurrency group, in characters.
+const MAX_TEXT_CHARS: usize = 1024;
+
+// Actions: metrics.
+/// Why a workflow has no plan: the error its workflow-error run shows, and its kind (the
+/// `reason` of `rbit_actions_workflow_errors_total`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    pub reason: ErrorKind,
+    pub message: String,
+}
+
+/// One workflow file's answer to an event: a plan, or why it has none.
+#[derive(Debug, Clone)]
+pub struct Candidate {
+    /// `.forgejo/workflows/ci.yml`.
+    pub path: String,
+    /// The workflow's `name`, or its path.
+    pub name: String,
+    /// The plan, or the error shown on the workflow-error run.
+    pub outcome: Result<RunPlan, Problem>,
+}
+
+/// The event every run it starts shares.
+#[derive(Debug, Clone)]
+pub struct Trigger<'a> {
+    pub repo: &'a OwnedRepository,
+    pub event: RunEvent,
+    /// The full ref.
+    pub reference: &'a str,
+    pub sha: &'a str,
+    /// The commit subject, pull request title or "Scheduled".
+    pub title: &'a str,
+    pub actor: Option<AccountId>,
+    pub trigger_actor: Option<AccountId>,
+    pub pull_number: Option<i64>,
+    pub is_fork: bool,
+    pub trust: RunTrust,
+    /// The event payload as stored (see `context::fit_payload`).
+    pub payload: &'a str,
+    /// The checked dispatch inputs (a JSON object).
+    pub inputs: Option<&'a str>,
+}
+
+/// What one event may still start (§11.8; `rbit_actions::scheduling`).
+pub use rbit_actions::scheduling::Allowance;
+
+impl ActionsService {
+    /// The allowance of one event, from `[actions] max_runs_per_event` and `max_jobs_per_event`.
+    pub fn allowance(&self) -> Allowance {
+        Allowance { runs: self.config().max_runs_per_event, jobs: self.config().max_jobs_per_event }
+    }
+
+    /// Records a workflow error: a failed run without jobs that says why nothing ran.
+    async fn record_error(
+        &self,
+        trigger: &Trigger<'_>,
+        path: &str,
+        name: &str,
+        reason: ErrorKind,
+        error: &str,
+    ) -> Result<Run, ServiceError> {
+        let (path, name, title) =
+            (truncate_chars(path, MAX_TEXT_CHARS), truncate_chars(name, MAX_TEXT_CHARS), truncate_chars(trigger.title, MAX_TEXT_CHARS));
+        let error = truncate_bytes(error, MAX_ERROR_BYTES);
+        let run = self
+            .ctx()
+            .database
+            .actions_runs()
+            .create_run(&NewRun { error: Some(&error), ..new_run(trigger, &path, &name, &title) })
+            .await?;
+        tracing::info!(repo = %trigger.repo.full_name(), run = run.id.0, workflow = %run.workflow_path, "workflow error recorded");
+        // Actions: metrics.
+        metrics::counter!("rbit_actions_workflow_errors_total", "reason" => reason.as_str()).increment(1);
+        // Actions: integration (I).
+        self.announce(run.id).await?;
+        Ok(run)
+    }
+
+    /// How a run of `group` that is about to become runnable starts (§11.6), with the
+    /// group's decisions already serialised by the caller: with `cancel_in_progress` every
+    /// other unfinished run of the group is cancelled; otherwise runs that were only held
+    /// are cancelled (the newer run replaces them) and the run is held while another is
+    /// active. Runs awaiting approval never hold a group. `own` is the run itself, when it already exists.
+    async fn enter_group(
+        &self,
+        repo: RepoId,
+        group: &str,
+        cancel: bool,
+        own: Option<RunId>,
+        by: Option<&str>,
+    ) -> Result<RunStart, ServiceError> {
+        let store = self.ctx().database.actions_runs();
+        let others = members(&store.unfinished_in_group(repo, group).await?);
+        let entry = scheduling::enter_group(&others, own, cancel);
+        let cancelled = !entry.cancel.is_empty();
+        for other in entry.cancel {
+            if let Some(settled) = self.cancel_superseded(repo, other, by).await? {
+                tracing::info!(repo = repo.0, run = other.0, group, "workflow run cancelled by its concurrency group");
+                self.followed_up(&settled).await?;
+            }
+        }
+        // A run just cancelled whose runner is still ending a task holds the group until it
+        // stops (its `always()` steps must not overlap the next run); that settles it and
+        // releases the next.
+        let draining = cancelled
+            && members(&store.unfinished_in_group(repo, group).await?)
+                .iter()
+                .any(|&(id, member)| Some(id) != own && matches!(member, Member::Draining | Member::Active));
+        Ok(match entry.start {
+            Start::Runnable if !draining => RunStart::Runnable,
+            Start::Runnable | Start::HeldForConcurrency => RunStart::HeldForConcurrency,
+        })
+    }
+
+    /// Follows up a transition of a run's jobs (see the module documentation). Call it
+    /// after every store transition that returns [`Settled`].
+    pub async fn settled(&self, settled: &Settled) -> Result<(), ServiceError> {
+        self.followed_up(settled).await?;
+        // The server's decisions may have finished the run since `settled` was taken.
+        let store = self.ctx().database.actions_runs();
+        let Some(run) = store.run(settled.run_id).await? else { return Ok(()) };
+        if !run.status.is_done() {
+            return Ok(());
+        }
+        if let Some(group) = &run.concurrency_group {
+            self.release_next(run.repo_id, group).await?;
+        }
+        Ok(())
+    }
+
+    /// What every transition needs, without the group: the server's decisions about jobs
+    /// (conditions, fail-fast; each may settle more), the scheduler's version and the jobs'
+    /// commit statuses.
+    async fn followed_up(&self, settled: &Settled) -> Result<(), ServiceError> {
+        // Actions: join (J). Each decision unblocks or finishes at least one job, so this
+        // ends after at most as many rounds as the run has jobs.
+        let mut pending = vec![settled.clone()];
+        while let Some(next) = pending.pop() {
+            if !next.now_waiting.is_empty() {
+                self.bump_tasks_version();
+            }
+            pending.extend(self.decide_jobs(&next).await?);
+        }
+        self.report_statuses(settled.run_id).await
+    }
+
+    /// Starts the oldest held run of `group` once no other run of it is active.
+    async fn release_next(&self, repo: RepoId, group: &str) -> Result<(), ServiceError> {
+        let _decisions = self.inner.groups.lock().await;
+        let store = self.ctx().database.actions_runs();
+        let unfinished = members(&store.unfinished_in_group(repo, group).await?);
+        let Some(next) = scheduling::next_to_release(&unfinished) else { return Ok(()) };
+        if let Some(settled) = store.release_run(repo, next, Timestamp::now()).await? {
+            tracing::info!(repo = repo.0, run = next.0, group, "held workflow run released");
+            self.followed_up(&settled).await?;
+        }
+        Ok(())
+    }
+}
+
+// ------------------------------------------------------------------ people acting on runs
+
+impl ActionsService {
+    /// Cancels run `id` of `repo` for `actor`, a writer: jobs not yet running at once,
+    /// running ones in the database (their runners learn it on their next update).
+    pub async fn cancel(&self, actor: &User, repo: &RepoContext, id: RunId) -> Result<Run, ServiceError> {
+        require_write(repo)?;
+        let store = self.ctx().database.actions_runs();
+        let repo_id = repo.repo.repo.id;
+        store.find_run(repo_id, id).await?.ok_or(ServiceError::NotFound)?;
+        let Some(settled) = store.cancel_run(repo_id, id, Timestamp::now()).await? else {
+            return Err(ServiceError::Invalid(requests::ALREADY_FINISHED.to_owned()));
+        };
+        tracing::info!(repo = %repo.repo.full_name(), run = id.0, by = %actor.name(), "workflow run cancelled");
+        self.settled(&settled).await?;
+        store.find_run(repo_id, id).await?.ok_or(ServiceError::NotFound)
+    }
+
+    /// Starts finished run `id` again for `actor`, a writer: every job, the failed ones, or
+    /// one job — each with the jobs that need it. The run keeps its number and gets a new
+    /// attempt. An untrusted run stays read-only and waits for approval again unless its
+    /// author would skip the wait today: re-running is not approving.
+    pub async fn rerun(&self, actor: &User, repo: &RepoContext, id: RunId, which: Rerun) -> Result<Run, ServiceError> {
+        require_write(repo)?;
+        repo.ensure_writable()?;
+        let store = self.ctx().database.actions_runs();
+        let repo_id = repo.repo.repo.id;
+        let run = store.find_run(repo_id, id).await?.ok_or(ServiceError::NotFound)?;
+        if self.ctx().database.actions_deployments().is_deployment_run(repo_id, id).await? {
+            return Err(ServiceError::Invalid(
+                "start a new deployment from its history so the current trusted workflow and gates are rechecked".into(),
+            ));
+        }
+
+        if let Rerun::Job(job) = which
+            && store.find_job(repo_id, job).await?.is_none_or(|job| job.run_id != id)
+        {
+            return Err(ServiceError::NotFound);
+        }
+        requests::check_rerun(run.is_workflow_error(), run.status.is_done()).map_err(|why| ServiceError::Invalid(why.to_owned()))?;
+        let awaits = self.awaits_approval(&repo.repo, &run).await?;
+        let decisions = self.inner.groups.lock().await;
+        let start = match (&run.concurrency_group, awaits) {
+            (_, true) => RunStart::AwaitingApproval,
+            (Some(group), false) => self.enter_group(repo_id, group, run.cancel_in_progress, Some(id), Some(&run.sha)).await?,
+            (None, false) => RunStart::Runnable,
+        };
+        let settled = store.rerun(repo_id, id, which, start, Timestamp::now(), Some(actor.id())).await?;
+        drop(decisions);
+        let Some(settled) = settled else {
+            return Err(ServiceError::Invalid(requests::NO_MATCHING_JOB.to_owned()));
+        };
+        tracing::info!(repo = %repo.repo.full_name(), run = id.0, by = %actor.name(), ?which, "workflow run started again");
+        self.settled(&settled).await?;
+        store.find_run(repo_id, id).await?.ok_or(ServiceError::NotFound)
+    }
+
+    /// Approves run `id` of `repo`, which awaits approval, for `actor`, a writer (audited).
+    /// Its concurrency group applies now. The run stays read-only, without secrets or
+    /// variables. With `trust_author`, the pull request's author is trusted in the
+    /// repository from now on: their runs no longer wait (also audited).
+    pub async fn approve(&self, actor: &User, repo: &RepoContext, id: RunId, trust_author: bool) -> Result<Run, ServiceError> {
+        require_write(repo)?;
+        repo.ensure_writable()?;
+        let store = self.ctx().database.actions_runs();
+        let repo_id = repo.repo.repo.id;
+        let run = store.find_run(repo_id, id).await?.ok_or(ServiceError::NotFound)?;
+        requests::check_approval(run.status == Status::AwaitingApproval).map_err(|why| ServiceError::Invalid(why.to_owned()))?;
+        let decisions = self.inner.groups.lock().await;
+        let hold = match &run.concurrency_group {
+            Some(group) => {
+                self.enter_group(repo_id, group, run.cancel_in_progress, Some(id), Some(&run.sha)).await? == RunStart::HeldForConcurrency
+            }
+            None => false,
+        };
+        let settled = store.approve_run(repo_id, id, actor.id(), hold, Timestamp::now()).await?;
+        drop(decisions);
+        let Some(settled) = settled else {
+            return Err(ServiceError::Invalid(requests::NOT_AWAITING_APPROVAL.to_owned()));
+        };
+        self.settled(&settled).await?;
+        let full_name = repo.repo.full_name();
+        let detail = format!("run #{} of {} at {}", run.number, run.workflow_path, run.sha);
+        self.audit().record(AuditEntry::new(AuditAction::ActionsRunApproved).by(actor).on(full_name.clone()).detail(detail)).await;
+        if trust_author && let Some(author) = self.pull_author(repo_id, &run).await? {
+            let settings = self.ctx().database.actions_settings();
+            if settings.trust(repo_id, author.id, actor.id(), Timestamp::now()).await? {
+                let entry = AuditEntry::new(AuditAction::ActionsUserTrusted).by(actor).on(full_name).detail(author.name.to_string());
+                self.audit().record(entry).await;
+            }
+        }
+        store.find_run(repo_id, id).await?.ok_or(ServiceError::NotFound)
+    }
+
+    /// Whether an untrusted run waits for approval when it starts again: the rule of its
+    /// creation (`trust::classify_pull_request`), with today's standing.
+    async fn awaits_approval(&self, repo: &OwnedRepository, run: &Run) -> Result<bool, ServiceError> {
+        if RunTrust::from_stored(run.trusted).is_trusted() {
+            return Ok(false);
+        }
+        let author = self.pull_author(repo.repo.id, run).await?.map(|author| author.id);
+        let trust = self.classify_pull_request(repo, run.actor, author, run.is_fork).await?;
+        Ok(matches!(trust, RunTrust::Untrusted { awaits_approval: true }))
+    }
+
+    /// The author of the pull request a run belongs to, if any.
+    async fn pull_author(&self, repo: RepoId, run: &Run) -> Result<Option<Account>, ServiceError> {
+        let Some(number) = run.pull_number.and_then(|number| u32::try_from(number).ok()).and_then(IssueNumber::new) else {
+            return Ok(None);
+        };
+        let database = &self.ctx().database;
+        let Some(author) = database.issues().find_by_number(repo, number).await?.and_then(|issue| issue.author) else { return Ok(None) };
+        Ok(database.accounts().find_accounts(&[author]).await?.pop())
+    }
+
+    pub(super) fn audit(&self) -> AuditService {
+        AuditService::from_store(self.ctx().database.audit())
+    }
+}
+
+/// A group's unfinished runs as the concurrency decisions see them, in the store's order.
+fn members(runs: &[Run]) -> Vec<(RunId, Member)> {
+    runs.iter()
+        .map(|run| {
+            let member = match run.status {
+                Status::AwaitingApproval => Member::AwaitingApproval,
+                Status::Blocked => Member::Held,
+                // Listed though finished: a task of it has not stopped yet.
+                status if status.is_done() => Member::Draining,
+                _ => Member::Active,
+            };
+            (run.id, member)
+        })
+        .collect()
+}
+
+/// Acting on runs needs write access; readers learn the run exists, others do not.
+fn require_write(repo: &RepoContext) -> Result<(), ServiceError> {
+    if repo.access.can_write() {
+        Ok(())
+    } else if repo.access.can_read() {
+        Err(ServiceError::Forbidden)
+    } else {
+        Err(ServiceError::NotFound)
+    }
+}
+
+/// The run row every run of `trigger` shares; callers set the jobs, the group and the start.
+fn new_run<'a>(trigger: &Trigger<'a>, path: &'a str, name: &'a str, title: &'a str) -> NewRun<'a> {
+    NewRun {
+        repo: trigger.repo.repo.id,
+        workflow_path: path,
+        workflow_name: name,
+        title,
+        event: trigger.event,
+        reference: trigger.reference,
+        sha: trigger.sha,
+        actor: trigger.actor,
+        trigger_actor: trigger.trigger_actor,
+        pull_number: trigger.pull_number,
+        is_fork: trigger.is_fork,
+        trusted: trigger.trust.is_trusted(),
+        concurrency_group: None,
+        cancel_in_progress: false,
+        event_payload: trigger.payload,
+        dispatch_inputs: trigger.inputs,
+        start: RunStart::Runnable,
+        jobs: &[],
+        error: None,
+        now: Timestamp::now(),
+    }
+}
+
+/// An untrusted run's group lives under its pull request (`pr-<number>/<group>`), so it
+/// can never cancel or hold a run of anyone else.
+fn namespaced_group(trigger: &Trigger<'_>, group: &str) -> String {
+    let group = Isolation::of(trigger.trust.is_trusted(), trigger.pull_number).namespaced_group(group);
+    truncate_chars(&group, MAX_TEXT_CHARS)
+}
+
+/// The owned values a run's [`NewJob`]s borrow.
+pub(super) struct JobRows {
+    names: Vec<String>,
+    matrices: Vec<Option<String>>,
+    permissions: Vec<Option<String>>,
+    /// Each job's [`JobTemplate`] as JSON, stored as its payload.
+    templates: Vec<Vec<u8>>,
+}
+
+impl JobRows {
+    pub(super) fn new(jobs: &[JobTemplate]) -> Self {
+        Self {
+            names: jobs
+                .iter()
+                .map(|job| if job.name.trim().is_empty() { job.job_id.clone() } else { truncate_chars(&job.name, MAX_TEXT_CHARS) })
+                .collect(),
+            matrices: jobs
+                .iter()
+                .map(|job| (!job.matrix.is_empty()).then(|| serde_json::to_string(&job.matrix).unwrap_or_default()))
+                .collect(),
+            permissions: jobs
+                .iter()
+                .map(|job| job.permissions.map(|permissions| serde_json::to_string(&permissions).unwrap_or_default()))
+                .collect(),
+            templates: jobs.iter().map(|job| serde_json::to_vec(job).unwrap_or_default()).collect(),
+        }
+    }
+
+    pub(super) fn jobs<'a>(&'a self, jobs: &'a [JobTemplate]) -> Vec<NewJob<'a>> {
+        jobs.iter()
+            .enumerate()
+            .map(|(index, job)| NewJob {
+                key: &job.job_id,
+                name: &self.names[index],
+                matrix: self.matrices[index].as_deref(),
+                needs: &job.needs,
+                runs_on: &job.runs_on,
+                permissions: self.permissions[index].as_deref(),
+                payload: &self.templates[index],
+                // Actions: join (J).
+                condition: super::calls::decided_by_server(job),
+                max_parallel: job.strategy.max_parallel,
+                group: job.concurrency.as_ref().map(|concurrency| concurrency.group.as_str()),
+                // Actions: environments.
+                environment: job.environment.as_deref(),
+            })
+            .collect()
+    }
+}
+
+/// A job's `permissions:` as stored: [`TokenPermissions`] in JSON, which the scheduler
+/// reads back to lower the token (`rbit_core::actions::token_permissions`).
+pub fn permissions_json(permissions: Permissions) -> String {
+    let level = |permission: Permission| match permission {
+        Permission::None => PermissionLevel::None,
+        Permission::Read => PermissionLevel::Read,
+        Permission::Write => PermissionLevel::Write,
+    };
+    let token = TokenPermissions {
+        contents: level(permissions.contents),
+        issues: level(permissions.issues),
+        pull_requests: level(permissions.pull_requests),
+        id_token: permissions.id_token,
+    };
+    serde_json::to_string(&token).unwrap_or_else(|_| "{}".to_owned())
+}
+
+/// At most `max` characters of `text`.
+pub fn truncate_chars(text: &str, max: usize) -> String {
+    text.char_indices().nth(max).map_or(text, |(end, _)| &text[..end]).to_owned()
+}
+
+/// At most `max` bytes of `text`, cut on a character boundary.
+pub fn truncate_bytes(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texts_are_cut_on_character_boundaries() {
+        assert_eq!(truncate_chars("héllo", 2), "hé");
+        assert_eq!(truncate_chars("hi", 10), "hi");
+        assert_eq!(truncate_bytes("héllo", 2), "h");
+        assert_eq!(truncate_bytes("héllo", 3), "hé");
+        assert_eq!(truncate_bytes("hi", 10), "hi");
+    }
+
+    #[test]
+    fn permissions_are_stored_as_token_permissions() {
+        let declared =
+            Permissions { contents: Permission::Read, issues: Permission::None, pull_requests: Permission::Write, id_token: false };
+        let stored = permissions_json(declared);
+        assert_eq!(stored, r#"{"contents":"read","issues":"none","pull_requests":"write","id_token":false}"#);
+        let read: TokenPermissions = serde_json::from_str(&stored).unwrap();
+        assert_eq!(read.pull_requests, PermissionLevel::Write);
+    }
+}

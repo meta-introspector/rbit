@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+<section class="box" data-language-content>
+  <div class="box-header justify-between">
+    <h1 id="language-files-title" class="font-medium">{% if let Some(language) = language %}{% call ui::localized(rbit_localization::RepoBrowseMessage::LanguageFiles { language: language }.text(page.locale)) %}{% endcall %}{% else %}{% call ui::localized(rbit_localization::RepoBrowseLabel::GoToFile.text(page.locale)) %}{% endcall %}{% endif %} <span class="ms-2 text-ink-faint">{{ pagination.total }}{% if truncated %}+{% endif %}</span></h1>
+    <div class="flex items-center gap-2">
+      {% if let Some(url) = clear_filters %}<a class="btn btn-ghost" href="{{ url }}" data-listing-page data-clear-file-filters>{% call ui::localized(rbit_localization::RepoBrowseLabel::ClearFileFilters.text(page.locale)) %}{% endcall %}</a>{% endif %}
+      <button type="button" class="btn btn-ghost btn-icon" data-language-close aria-label="{{ rbit_localization::RepoBrowseLabel::CloseFileBrowser.text(page.locale) }}" hidden>{% call ui::icon("x", "size-4") %}{% endcall %}</button>
+    </div>
+  </div>
+  <div class="px-4">
+    {% include "repo/listing_controls.html" %}
+    {% if truncated %}<p class="mb-3 text-xs text-ink-muted" role="status">{% call ui::localized(rbit_localization::RepoBrowseLabel::TooManyFilesToSearch.text(page.locale)) %}{% endcall %}</p>{% endif %}
+  </div>
+  <div class="language-browser">
+  <nav class="language-file-list" aria-label="{{ rbit_localization::RepoBrowseLabel::Files.text(page.locale) }}" data-file-outline>
+    <ul class="diff-tree">
+      {% for row in rows %}
+      <li class="diff-tree-row" data-depth="{{ row.depth }}" data-path="{{ row.path }}">
+        {% if let Some(url) = row.url %}
+        <a class="diff-tree-item" href="{{ url }}" data-outline-file title="{{ row.path }}"><span class="w-3 shrink-0"></span>{% call ui::icon("file", "size-3.5 shrink-0") %}{% endcall %}<span class="truncate">{{ row.name }}</span></a>
+        {% else %}
+        <button type="button" class="diff-tree-item" aria-expanded="true" title="{{ row.path }}" data-outline-folder>{% call ui::icon("chevron-right", "diff-tree-chevron size-3 shrink-0") %}{% endcall %}{% call ui::icon("folder", "size-3.5 shrink-0") %}{% endcall %}<span class="truncate">{{ row.name }}</span></button>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% if rows.is_empty() %}<p class="p-6 text-ink-muted">{% if !pagination.query.is_empty() %}{% call ui::localized(rbit_localization::RepoBrowseLabel::NoMatchingFiles.text(page.locale)) %}{% endcall %}{% else if language.is_some() %}{% call ui::localized(rbit_localization::RepoBrowseLabel::NoFilesForLanguage.text(page.locale)) %}{% endcall %}{% else %}{% call ui::localized(rbit_localization::RepoBrowseLabel::NoFilesInRevision.text(page.locale)) %}{% endcall %}{% endif %}</p>{% endif %}
+  </nav>
+  <section class="language-preview" aria-label="{{ rbit_localization::RepoBrowseLabel::FileContent.text(page.locale) }}" aria-busy="false" data-language-preview>
+    <p class="p-6 text-sm text-ink-muted" role="status">{% call ui::localized(rbit_localization::RepoBrowseLabel::SelectFileToPreview.text(page.locale)) %}{% endcall %}</p>
+  </section>
+  </div>
+</section>
+{% endblock %}

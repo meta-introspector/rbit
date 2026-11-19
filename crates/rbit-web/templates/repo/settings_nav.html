@@ -1,0 +1,8 @@
+<nav class="flex gap-1 scroll-tabs border-b border-line pb-3 md:flex-col md:border-b-0 md:pb-0" aria-label="{{ rbit_localization::RepoSettingsLabel::Settings.text(page.locale) }}">
+  <a class="menu-item w-auto shrink-0 md:w-full {% if page.path == header.settings_url %}bg-hover font-medium{% else %}text-ink-muted{% endif %}" href="{{ header.settings_url }}" {% if page.path == header.settings_url %}aria-current="page"{% endif %}>{% call ui::localized(rbit_localization::RepoSettingsLabel::General.text(page.locale)) %}{% endcall %}</a>
+  <a class="menu-item w-auto shrink-0 md:w-full" href="{{ header.home_url }}/settings/signing-keys">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningKeys.text(page.locale)) %}{% endcall %}</a>
+  {% for link in header.settings_navigation(page.path) %}
+  <a class="menu-item w-auto shrink-0 md:w-full {% if link.active %}bg-hover font-medium{% else %}text-ink-muted hover:text-ink{% endif %}" href="{{ link.card.url }}" {% if link.active %}aria-current="page"{% endif %}>{% call ui::icon(link.card.icon, "size-4 shrink-0") %}{% endcall %}{% call ui::localized(link.card.title.text(page.locale)) %}{% endcall %}</a>
+  {% endfor %}
+  <a class="menu-item w-auto shrink-0 md:w-full text-danger" href="{{ header.settings_url }}#danger-zone-title">{% call ui::localized(rbit_localization::RepoSettingsLabel::DangerZone.text(page.locale)) %}{% endcall %}</a>
+</nav>

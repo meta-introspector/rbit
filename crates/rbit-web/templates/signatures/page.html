@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+<section class="box space-y-4 p-4">
+<h1 class="text-lg font-semibold">{% call ui::localized(rbit_localization::RepoBrowseLabel::SignatureTitle.text(page.locale)) %}{% endcall %}</h1>
+<p class="break-all font-mono text-xs" dir="ltr">{{ kind }} {{ object_id }}</p>
+<a class="badge" href="{{ signature.url }}" data-signature-state="{{ signature.state.as_str() }}">{% call ui::localized(signature.label().text(page.locale)) %}{% endcall %}</a>
+<p class="text-sm text-ink-muted">{% call ui::localized(rbit_localization::RepoBrowseLabel::SignatureTrustNote.text(page.locale)) %}{% endcall %}</p>
+</section>
+{% endblock %}

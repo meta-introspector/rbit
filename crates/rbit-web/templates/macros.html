@@ -1,0 +1,125 @@
+{#- Reusable UI fragments. Import with: {% import "macros.html" as ui %} -#}
+
+{#- Catalog text that may be the English fallback of an untranslated message
+    (rbit_localization::Localized): fallback text is marked English, and it keeps the page
+    direction. Translated text gets no wrapper in English and Spanish; in the other locales,
+    where a page may still hold English feature content, it declares its own language. -#}
+{% macro localized(value) -%}
+{%- if let Some(lang) = value.marked_lang() %}<span lang="{{ lang }}">{{ value }}</span>{% else %}{{ value }}{% endif -%}
+{%- endmacro %}
+
+{#- A catalog message in the page's content language (`Page::text`), marked like `localized`. -#}
+{% macro text(page, message) -%}
+{%- call localized(page.text(*message)) %}{% endcall -%}
+{%- endmacro %}
+
+{#- Lucide-style 24px stroke icons, inlined so they inherit `currentColor` and need no requests.
+    Glyphs pointing along the reading direction get `dir-icon` and mirror in RTL (direction.css).
+    The catalog is Rust (src/icons.rs): Askama copies a macro body into every call site. -#}
+{% macro icon(name, class) %}
+{{ crate::icons::svg(name, class)|safe }}
+{% endmacro %}
+
+{#- A link to a settings sub-page; `card` is a `components::SettingsCard`. -#}
+{% macro settings_card(card, locale) %}
+<a href="{{ card.url }}" class="box mt-6 flex items-center gap-3 px-4 py-3 hover:bg-subtle">
+  {%- if card.icon == "server" -%}{% call icon("server", "size-4 shrink-0 text-ink-muted") %}{% endcall %}
+  {%- else if card.icon == "users" -%}{% call icon("users", "size-4 shrink-0 text-ink-muted") %}{% endcall %}
+  {%- else if card.icon == "webhook" -%}{% call icon("webhook", "size-4 shrink-0 text-ink-muted") %}{% endcall %}
+  {%- else if card.icon == "refresh" -%}{% call icon("refresh", "size-4 shrink-0 text-ink-muted") %}{% endcall %}
+  {%- else if card.icon == "transfer" -%}{% call icon("transfer", "size-4 shrink-0 text-ink-muted") %}{% endcall %}
+  {%- else if card.icon == "shield" -%}{% call icon("shield", "size-4 shrink-0 text-ink-muted") %}{% endcall %}
+  {%- else if card.icon == "zap" -%}{% call icon("zap", "size-4 shrink-0 text-ink-muted") %}{% endcall %}
+  {%- else -%}{% call icon("settings", "size-4 shrink-0 text-ink-muted") %}{% endcall %}
+  {%- endif %}
+  <span class="min-w-0 flex-1">
+    <span class="block text-[13px] font-medium">{% call localized(card.title.text(locale)) %}{% endcall %}</span>
+    <span class="block text-[13px] text-ink-muted">{% call localized(card.description.text(locale)) %}{% endcall %}</span>
+  </span>
+  {% call icon("chevron-right", "size-4 shrink-0 text-ink-faint") %}{% endcall %}
+</a>
+{% endmacro %}
+
+{#- The rbit frog mascot, shared by every branded surface. `px` is its rendered CSS size, so the
+    browser picks the small icon for the top bar (it is on every page's critical path) and the
+    larger one only where the mascot is shown big. -#}
+{% macro logo(class, px) %}
+<img class="{{ class }} object-contain" src="{{ crate::assets::url("icon-96.png") }}" srcset="{{ crate::assets::url("icon-96.png") }} 96w, {{ crate::assets::url("icon-192.png") }} 192w" sizes="{{ px }}px" width="96" height="96" alt="" aria-hidden="true">
+{% endmacro %}
+
+{% macro avatar(avatar, size) %}
+<span class="{{ avatar.class() }} {{ size }}" aria-hidden="true">{{ avatar.initials }}</span>
+{% endmacro %}
+
+{% macro form_error(error) %}
+{% if let Some(message) = error.0 %}
+<div role="alert" class="mb-5 flex items-start gap-2 rounded-(--radius-ui) border border-danger/40 bg-danger-subtle px-3 py-2.5 text-[13px] text-danger">
+  {% call icon("alert", "mt-px size-4 shrink-0") %}{% endcall %}
+  <span{% if error.fallback() %} lang="en"{% endif %}>{{ message }}</span>
+</div>
+{% endif %}
+{% endmacro %}
+
+{#- One repository row inside a `.box`. -#}
+{% macro repo_row(repo) %}
+<li class="border-b border-line last:border-b-0">
+  <a href="{{ repo.url }}" class="group flex items-start gap-3 px-4 py-3 hover:bg-subtle">
+    {% call icon("repo", "mt-0.5 size-4 shrink-0 text-ink-faint") %}{% endcall %}
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2">
+        <span class="truncate font-medium"><span class="text-ink-muted">{{ repo.owner }}/</span>{{ repo.name }}</span>
+        {% if repo.is_private %}<span class="badge">{% call text(page, rbit_localization::shell::pages::PageMessage::Private) %}{% endcall %}</span>{% endif %}
+        {% if repo.is_archived %}<span class="badge">{% call text(page, rbit_localization::shell::pages::PageMessage::Archived) %}{% endcall %}</span>{% endif %}
+      </div>
+      {% if let Some(description) = repo.description %}
+      <p class="mt-0.5 line-clamp-2 text-[13px] text-ink-muted">{{ description }}</p>
+      {% endif %}
+    </div>
+    <div class="flex shrink-0 items-center gap-3 text-xs text-ink-faint">
+      {% if repo.star_count > 0 %}<span class="flex items-center gap-1" title="{{ page.text(rbit_localization::shell::pages::PageMessage::Stars(*repo.star_count)) }}">{% call icon("star", "size-3") %}{% endcall %}{{ repo.star_count }}</span>{% endif %}
+      <time datetime="{{ repo.updated_iso }}">{% call localized(repo.updated.relative(page.locale)) %}{% endcall %}</time>
+    </div>
+  </a>
+</li>
+{% endmacro %}
+
+{#- Centered empty state inside a `.box`. -#}
+{% macro empty_state(icon_name, title, text) %}
+<div class="flex flex-col items-center px-6 py-14 text-center">
+  <div class="grid size-10 place-items-center rounded-(--radius-ui) border border-line text-ink-muted">{% call icon(icon_name, "size-5") %}{% endcall %}</div>
+  <p class="mt-4 font-medium">{{ title }}</p>
+  <p class="mt-1 max-w-sm text-[13px] text-ink-muted">{{ text }}</p>
+</div>
+{% endmacro %}
+{#- `empty_state` with catalog text (`Localized`), marked like `localized`. -#}
+{% macro localized_empty_state(icon_name, title, text) %}
+<div class="flex flex-col items-center px-6 py-14 text-center">
+  <div class="grid size-10 place-items-center rounded-(--radius-ui) border border-line text-ink-muted">{% call icon(icon_name, "size-5") %}{% endcall %}</div>
+  <p class="mt-4 font-medium">{% call localized(title) %}{% endcall %}</p>
+  <p class="mt-1 max-w-sm text-[13px] text-ink-muted">{% call localized(text) %}{% endcall %}</p>
+</div>
+{% endmacro %}
+{#- "Previous · Page n of m · Next" under a paged list; expects a `Pagination`. -#}
+{% macro pagination(pager) %}
+{% if pager.is_needed() %}
+<nav class="mt-4 flex items-center justify-between gap-2" aria-label="{{ page.text(rbit_localization::shell::pages::PageMessage::Pagination) }}">
+  {% if let Some(url) = pager.previous_url %}
+  <a href="{{ url }}" class="btn" rel="prev">{% call icon("chevron-left", "size-3.5") %}{% endcall %}{% call text(page, rbit_localization::shell::pages::PageMessage::Previous) %}{% endcall %}</a>
+  {% else %}
+  <span class="btn pointer-events-none opacity-50" aria-hidden="true">{% call icon("chevron-left", "size-3.5") %}{% endcall %}{% call text(page, rbit_localization::shell::pages::PageMessage::Previous) %}{% endcall %}</span>
+  {% endif %}
+  <span class="text-xs text-ink-muted">{% call text(page, rbit_localization::shell::pages::PageMessage::PageOf(*pager.page, *pager.page_count)) %}{% endcall %}</span>
+  {% if let Some(url) = pager.next_url %}
+  <a href="{{ url }}" class="btn" rel="next" data-preload="visible">{% call text(page, rbit_localization::shell::pages::PageMessage::Next) %}{% endcall %}{% call icon("chevron-right", "size-3.5") %}{% endcall %}</a>
+  {% else %}
+  <span class="btn pointer-events-none opacity-50" aria-hidden="true">{% call text(page, rbit_localization::shell::pages::PageMessage::Next) %}{% endcall %}{% call icon("chevron-right", "size-3.5") %}{% endcall %}</span>
+  {% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
+
+{% macro brand_logo(page, class, px) %}
+{% if page.branding.logo_url.is_empty() %}
+{% call logo(class, px) %}{% endcall %}
+{% else %}<img src="{{ page.branding.logo_url }}" width="{{ px }}" height="{{ px }}" class="{{ class }} object-contain" alt="" aria-hidden="true">{% endif %}
+{% endmacro %}

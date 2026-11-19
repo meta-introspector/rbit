@@ -1,0 +1,2 @@
+{% import "macros.html" as ui %}
+<a class="badge" href="{{ url }}" data-signature-state="{{ state.as_str() }}">{% call ui::localized(label().text(locale)) %}{% endcall %}</a>

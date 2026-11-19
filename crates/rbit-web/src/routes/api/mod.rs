@@ -1,0 +1,411 @@
+//! The versioned REST API: `/api/v1/…`, JSON, authenticated by personal access tokens.
+//!
+//! Milestone 2 workstream W (API & webhooks) owns this file.
+//!
+//! Merged outside the page router: no session cookies, no CSRF check, no HTML error
+//! pages. This router brings its own layers (1 MiB bodies, a 30 s timeout, gzip,
+//! `nosniff`, `no-store`); authentication and rate limiting happen in the [`auth::Caller`]
+//! extractor every handler takes, JSON errors in [`ApiError`]. It sets no fallback (the
+//! page router owns that): unknown `/api/…` paths reach an explicit catch-all instead.
+//!
+//! Conventions: `snake_case` fields, numeric `id`s, RFC 3339 UTC timestamps, absolute URLs
+//! from `server.public_url`, explicit `null`s; lists are paginated with `?page=` and
+//! `?per_page=` and answer with `Link` and `X-Total-Count` (see [`pagination`]).
+//!
+//! The routes come from one table, [`table`]; wave B areas append theirs from child
+//! modules (`issues`, `notifications`, `pulls`, `protection`), milestone 3 too
+//! (`collaborators`, `teams`, `releases`, `forks`). `openapi.json` plus one fragment per
+//! area (`openapi/<area>.json`, merged once at start-up by [`openapi_document`]) documents
+//! the same set, and a test keeps the two equal. The table depends on the configuration: Actions routes and
+//! their fragments exist only when `[actions] enabled` is on.
+//!
+//! Streaming routes ([`ApiRoute::streaming`]: release file uploads and downloads) are
+//! served from the same table without the 1 MiB body limit, the 30 s timeout and
+//! compression; their handlers bound size and time themselves.
+
+mod accounts;
+mod agents;
+// Agent loop: ensure, readiness and commit queries.
+mod agent_preflight;
+mod agent_pulls;
+mod agent_review;
+mod agent_tokens;
+mod agent_writes;
+mod auth;
+mod collaborators;
+mod error;
+mod forks;
+mod hooks;
+mod issue_relations;
+mod issues;
+mod json;
+mod notifications;
+mod openapi_document;
+mod pagination;
+mod projects;
+mod protection;
+mod pulls;
+mod releases;
+mod repos;
+mod security;
+mod signatures;
+mod tag_protection;
+mod teams;
+#[cfg(test)]
+mod test_support;
+// Milestone 3: commit statuses (S).
+mod statuses;
+mod task_routes;
+// Actions: integration (I).
+mod actions;
+mod deployments;
+mod environments;
+
+use std::{borrow::Cow, time::Duration};
+
+use axum::{
+    Router,
+    extract::DefaultBodyLimit,
+    handler::Handler,
+    http::{HeaderValue, StatusCode, header},
+    routing::{MethodFilter, MethodRouter, any, on},
+};
+pub(super) use error::ApiError;
+use openapi_document::openapi;
+use rbit_core::Config;
+use rbit_services::actions::Availability;
+use tower_http::{compression::CompressionLayer, set_header::SetResponseHeaderLayer, timeout::TimeoutLayer};
+
+use crate::AppState;
+
+/// Every route is under this prefix.
+pub const PREFIX: &str = "/api/v1";
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// The HTTP methods the API uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ApiMethod {
+    Get,
+    Post,
+    Put,
+    Patch,
+    Delete,
+}
+
+impl ApiMethod {
+    #[cfg(test)]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "get",
+            Self::Post => "post",
+            Self::Put => "put",
+            Self::Patch => "patch",
+            Self::Delete => "delete",
+        }
+    }
+
+    const fn filter(self) -> MethodFilter {
+        match self {
+            Self::Get => MethodFilter::GET,
+            Self::Post => MethodFilter::POST,
+            Self::Put => MethodFilter::PUT,
+            Self::Patch => MethodFilter::PATCH,
+            Self::Delete => MethodFilter::DELETE,
+        }
+    }
+}
+
+/// One endpoint: method, path below [`PREFIX`] (axum syntax) and handler.
+pub struct ApiRoute {
+    pub method: ApiMethod,
+    pub path: Cow<'static, str>,
+    /// `None`: served by the handler of a wildcard route that also matches this path
+    /// (see [`route_in_wildcard`]); listed so the `OpenAPI` test covers it.
+    handler: Option<MethodRouter<AppState>>,
+    /// Served without the 1 MiB body limit, the 30 s timeout and compression (see
+    /// [`ApiRoute::streaming`]).
+    streaming: bool,
+}
+
+impl ApiRoute {
+    /// Marks a route whose body streams (release file uploads and downloads): it is served
+    /// without the 1 MiB body limit, the 30 s timeout and compression, so its handler must
+    /// bound the size and duration itself.
+    fn streaming(mut self) -> Self {
+        self.streaming = true;
+        self
+    }
+}
+
+impl std::fmt::Debug for ApiRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiRoute").field("method", &self.method).field("path", &self.path).finish_non_exhaustive()
+    }
+}
+
+fn route<H, T>(method: ApiMethod, path: impl Into<Cow<'static, str>>, handler: H) -> ApiRoute
+where
+    H: Handler<T, AppState>,
+    T: 'static,
+{
+    ApiRoute { method, path: path.into(), handler: Some(on(method.filter(), handler)), streaming: false }
+}
+
+/// An endpoint the router cannot register next to a wildcard (axum cannot route
+/// `/commits/{ref}/status` beside `/commits/{*reference}`); the wildcard's handler serves
+/// it (milestone 3, S: `statuses::commit_or_statuses`).
+fn route_in_wildcard(method: ApiMethod, path: impl Into<Cow<'static, str>>) -> ApiRoute {
+    ApiRoute { method, path: path.into(), handler: None, streaming: false }
+}
+
+/// Every endpoint of the API under `config`.
+pub fn table(config: &Config) -> Vec<ApiRoute> {
+    use ApiMethod::{Delete, Get, Patch, Post, Put};
+    let mut routes = vec![
+        route(Get, "/version", accounts::version),
+        route(Get, "/openapi.json", openapi),
+        route(Get, "/user", accounts::me),
+        route(Get, "/user/repos", accounts::my_repositories),
+        route(Post, "/user/repos", accounts::create_for_user),
+        route(Get, "/user/starred", accounts::starred),
+        route(Put, "/user/starred/{owner}/{repo}", accounts::star),
+        route(Delete, "/user/starred/{owner}/{repo}", accounts::unstar),
+        route(Get, "/users/{username}", accounts::user),
+        route(Get, "/users/{username}/repos", accounts::user_repositories),
+        route(Get, "/orgs/{org}", accounts::organization),
+        route(Get, "/orgs/{org}/members", accounts::members),
+        route(Get, "/orgs/{org}/repos", accounts::org_repositories),
+        route(Post, "/orgs/{org}/repos", accounts::create_for_org),
+        route(Get, "/repos/{owner}/{repo}", repos::show),
+        route(Patch, "/repos/{owner}/{repo}", repos::update),
+        route(Delete, "/repos/{owner}/{repo}", repos::delete),
+        route(Get, "/repos/{owner}/{repo}/branches", repos::branches),
+        route(Get, "/repos/{owner}/{repo}/search/code", repos::search_code),
+        route(Get, "/repos/{owner}/{repo}/branches/{*branch}", repos::branch),
+        route(Get, "/repos/{owner}/{repo}/tags", repos::tags),
+        route(Get, "/repos/{owner}/{repo}/commits", repos::commits),
+        // Also serves `…/commits/{ref}/statuses` and `…/status` (milestone 3, S).
+        route(Get, "/repos/{owner}/{repo}/commits/{*reference}", statuses::commit_or_statuses),
+    ];
+    for prefix in ["/repos/{owner}/{repo}/hooks", "/orgs/{org}/hooks"] {
+        let path = |suffix: &str| format!("{prefix}{suffix}");
+        routes.extend([
+            route(Get, path(""), hooks::list),
+            route(Post, path(""), hooks::create),
+            route(Get, path("/{id}"), hooks::show),
+            route(Patch, path("/{id}"), hooks::update),
+            route(Delete, path("/{id}"), hooks::delete),
+            route(Post, path("/{id}/pings"), hooks::ping),
+            route(Get, path("/{id}/deliveries"), hooks::deliveries),
+            route(Get, path("/{id}/deliveries/{delivery}"), hooks::delivery),
+            route(Post, path("/{id}/deliveries/{delivery}/attempts"), hooks::redeliver),
+        ]);
+    }
+    // Milestone 2 wave B: each area owns its routes and its `openapi/<area>.json` fragment.
+    routes.extend(issues::routes());
+    // Agent loop: taking and finding issues.
+    routes.extend(issues::take::routes());
+    routes.extend(notifications::routes());
+    routes.extend(pulls::routes());
+    // Agent loop: ensure, readiness and commit queries.
+    routes.extend(agent_pulls::routes());
+    routes.extend(agent_writes::routes());
+    routes.extend(agent_review::routes());
+    routes.extend(agent_tokens::routes());
+    routes.extend(agents::routes());
+    routes.extend(agent_preflight::routes());
+    routes.extend(protection::routes());
+    routes.extend(tag_protection::routes());
+    routes.extend(signatures::routes());
+    routes.extend(security::routes());
+    // Milestone 3: REST API continuation (A).
+    routes.extend(collaborators::routes());
+    routes.extend(teams::routes());
+    routes.extend(projects::routes());
+    routes.extend(issue_relations::routes());
+    routes.extend(releases::routes());
+    routes.extend(forks::routes());
+    // Milestone 3: commit statuses (S).
+    routes.extend(statuses::routes());
+    // Actions: foundation (F). Only when Actions is enabled.
+    if Availability::of(config.actions.enabled).is_enabled() {
+        routes.extend(actions_routes());
+    }
+    routes
+}
+
+/// The Actions endpoints, served only while Actions is on, with `openapi/actions.json` ([`ACTIONS_FRAGMENTS`]).
+fn actions_routes() -> Vec<ApiRoute> {
+    // Actions: integration (I).
+    let mut routes = actions::routes();
+    // Actions: environments.
+    routes.extend(environments::routes());
+    routes.extend(deployments::routes());
+    routes
+}
+
+pub fn routes(config: &Config) -> Router<AppState> {
+    let (streaming, buffered): (Vec<_>, Vec<_>) = table(config).into_iter().partition(|entry| entry.streaming);
+    let mut router = Router::new();
+    for entry in buffered {
+        if let Some(handler) = entry.handler {
+            router = router.route(&format!("{PREFIX}{}", entry.path), handler);
+        }
+    }
+    let mut streams = Router::new();
+    for entry in streaming {
+        if let Some(handler) = entry.handler {
+            streams = streams.route(&format!("{PREFIX}{}", entry.path), handler);
+        }
+    }
+    let streams = streams
+        .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")))
+        .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")));
+    router
+        .route("/api", any(not_found))
+        .route("/api/", any(not_found))
+        .route("/api/{*rest}", any(not_found))
+        .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")))
+        .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
+        .layer(CompressionLayer::new())
+        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, REQUEST_TIMEOUT))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        // After the layers above, so streaming routes do not get them.
+        .merge(streams)
+}
+
+/// Every other path under `/api`.
+async fn not_found() -> ApiError {
+    ApiError::not_found()
+}
+
+#[cfg(test)]
+mod tests {
+    use rbit_core::TokenScope;
+    use rbit_services::CreateRepository;
+
+    use super::{test_support::Fixture, *};
+
+    #[tokio::test]
+    async fn authentication_scopes_and_errors() {
+        let fixture = Fixture::new(|_| {}).await;
+        let alice = fixture.user("alice").await;
+        let read = fixture.token(&alice, TokenScope::Read).await;
+        let write = fixture.token(&alice, TokenScope::Write).await;
+
+        let (response, json) = fixture.send_text("GET", "/api/v1/version", None, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json["api"], "v1");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        assert_eq!(response.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert!(response.headers().get(header::SET_COOKIE).is_none(), "the API never sets cookies");
+
+        let (response, json) = fixture.send_text("GET", "/api/v1/user", None, None).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers()[header::WWW_AUTHENTICATE].to_str().unwrap().starts_with("Bearer"));
+        assert_eq!(json["message"], "Requires authentication");
+        let (response, _) = fixture.send_text("GET", "/api/v1/user", Some("rbit_not-a-real-token"), None).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let (response, json) = fixture.send_text("GET", "/api/v1/user", Some(&read), None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!((json["login"].as_str(), json["email"].as_str()), (Some("alice"), Some("alice@example.com")));
+        assert_eq!(json["url"], "https://git.example.com/api/v1/users/alice");
+
+        // read → GET only; write may create.
+        let body = r#"{"name":"demo","private":true}"#;
+        let (response, json) = fixture.send_text("POST", "/api/v1/user/repos", Some(&read), Some(body)).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{json}");
+        let (response, json) = fixture.send_text("POST", "/api/v1/user/repos", Some(&write), Some(body)).await;
+        assert_eq!(response.status(), StatusCode::CREATED, "{json}");
+        assert_eq!(response.headers()[header::LOCATION], "https://git.example.com/api/v1/repos/alice/demo");
+        assert_eq!((json["full_name"].as_str(), json["private"].as_bool()), (Some("alice/demo"), Some(true)));
+        let (response, json) = fixture.send_text("POST", "/api/v1/user/repos", Some(&write), Some(body)).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{json}");
+        let (response, json) = fixture.send_text("POST", "/api/v1/user/repos", Some(&write), Some(r#"{"name":"bad name"}"#)).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(json["errors"][0]["field"], "name");
+
+        // Bodies: malformed, the wrong type, too large.
+        let (response, _) = fixture.send_text("POST", "/api/v1/user/repos", Some(&write), Some("{not json")).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let huge = format!(r#"{{"name":"x","description":"{}"}}"#, "a".repeat(MAX_BODY_BYTES));
+        let (response, _) = fixture.send_text("POST", "/api/v1/user/repos", Some(&write), Some(&huge)).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // Admin actions need the admin scope even for the owner.
+        let (response, json) = fixture.send_text("PATCH", "/api/v1/repos/alice/demo", Some(&write), Some(r#"{"description":"x"}"#)).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(json["message"].as_str().unwrap().contains("admin scope"));
+        let (response, json) = fixture.send_text("GET", "/api/v1/repos/alice/demo", Some(&read), None).await;
+        assert_eq!(json["permissions"], serde_json::json!({ "admin": false, "push": false, "pull": true }), "capped by the read scope");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn hidden_things_are_404_and_unknown_paths_answer_json() {
+        let fixture = Fixture::new(|_| {}).await;
+        let alice = fixture.user("alice").await;
+        let bob = fixture.user("bob").await;
+        let input = CreateRepository { name: "vault".to_owned(), description: String::new(), visibility: rbit_core::Visibility::Private };
+        fixture.services.repositories.create(&alice, input).await.unwrap();
+        let bobs = fixture.token(&bob, TokenScope::Admin).await;
+
+        for path in [
+            "/api/v1/repos/alice/vault",
+            "/api/v1/repos/alice/vault/branches",
+            "/api/v1/repos/alice/vault/hooks",
+            "/api/v1/repos/alice/nope",
+        ] {
+            let (response, json) = fixture.send_text("GET", path, Some(&bobs), None).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            assert_eq!(json["message"], "Not Found");
+        }
+        let (response, _) = fixture.send_text("DELETE", "/api/v1/repos/alice/vault", Some(&bobs), None).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let (response, _) = fixture.send_text("GET", "/api/v1/repos/alice/vault", None, None).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "anonymous callers too");
+
+        for path in ["/api/v1/nope", "/api/v2/user", "/api", "/api/"] {
+            let (response, json) = fixture.send_text("GET", path, None, None).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            assert_eq!(json["message"], "Not Found", "{path}");
+        }
+        let (response, json) = fixture.send_text("GET", "/api/v1/openapi.json", None, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(json["paths"].is_object());
+    }
+
+    #[tokio::test]
+    async fn lists_are_paginated_with_links_and_totals() {
+        let fixture = Fixture::new(|config| config.api.max_page_size = 2).await;
+        let alice = fixture.user("alice").await;
+        for name in ["a", "b", "c"] {
+            let input = CreateRepository { name: name.to_owned(), description: String::new(), visibility: rbit_core::Visibility::Public };
+            fixture.services.repositories.create(&alice, input).await.unwrap();
+        }
+        let (response, json) = fixture.send_text("GET", "/api/v1/users/alice/repos?per_page=50", None, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json.as_array().unwrap().len(), 2, "per_page is capped by max_page_size");
+        assert_eq!(response.headers()["x-total-count"], "3");
+        let link = response.headers()[header::LINK].to_str().unwrap();
+        assert!(link.contains("<https://git.example.com/api/v1/users/alice/repos?per_page=2&page=2>; rel=\"next\""), "{link}");
+        assert!(link.contains("rel=\"last\""));
+
+        let (response, json) = fixture.send_text("GET", "/api/v1/users/alice/repos?per_page=2&page=2", None, None).await;
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert!(response.headers()[header::LINK].to_str().unwrap().contains("rel=\"prev\""));
+        let (response, json) = fixture.send_text("GET", "/api/v1/users/alice/repos?page=x", None, None).await;
+        assert_eq!((response.status(), json["errors"][0]["field"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("page")));
+    }
+
+    #[tokio::test]
+    async fn a_disabled_api_is_not_there() {
+        let fixture = Fixture::new(|config| config.api.enabled = false).await;
+        for path in ["/api/v1/version", "/api/v1/openapi.json", "/api/v1/user"] {
+            let (response, _) = fixture.send_text("GET", path, None, None).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+}

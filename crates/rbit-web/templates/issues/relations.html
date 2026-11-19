@@ -1,0 +1,20 @@
+<section class="min-w-0" aria-label="{{ rbit_localization::IssueSidebarMessage::Relationships.localized(page.locale) }}">
+<h2 class="text-xs font-medium text-ink-muted">{% call ui::localized(rbit_localization::IssueSidebarMessage::Relationships.localized(page.locale)) %}{% endcall %}</h2>
+{% if relations.data.progress.blocked %}<span class="badge mt-2">{% call ui::localized(rbit_localization::IssueSidebarMessage::Blocked.localized(page.locale)) %}{% endcall %}</span>{% endif %}
+{% if relations.data.progress.total > 0 %}<p class="mt-2">{{ relations.data.progress.completed }}/{{ relations.data.progress.total }} · {% call ui::localized(rbit_localization::IssueSidebarMessage::CompletedSubissues.localized(page.locale)) %}{% endcall %}</p>{% endif %}
+{% if relations.links.is_empty() %}<p class="hint mt-2">{% call ui::localized(rbit_localization::IssueSidebarMessage::NoRelationships.localized(page.locale)) %}{% endcall %}</p>{% endif %}
+<ul class="mt-2 space-y-3">
+{% for link in relations.links %}<li class="min-w-0">
+<p class="text-xs text-ink-muted">{% call ui::localized(link.relationship.localized(page.locale)) %}{% endcall %} · {% if link.open %}{% call ui::localized(rbit_localization::IssueFilterMessage::Open.localized(page.locale)) %}{% endcall %}{% else %}{% call ui::localized(rbit_localization::IssueFilterMessage::Closed.localized(page.locale)) %}{% endcall %}{% endif %}</p>
+<a class="block break-words hover:underline" href="{{ link.url }}">{{ link.title }} <span class="text-ink-muted">{{ link.reference }}</span></a>
+{% if link.can_remove %}<form method="post" action="{{ link.remove_url }}" class="mt-1"><button class="btn btn-ghost" type="submit">{% call ui::localized(rbit_localization::IssueSidebarMessage::RemoveRelationship.localized(page.locale)) %}{% endcall %}</button></form>{% endif %}
+</li>{% endfor %}</ul>
+<p class="hint mt-3">{% call ui::localized(rbit_localization::IssueSidebarMessage::VisibleRelationsHint.localized(page.locale)) %}{% endcall %}</p>
+{% if relations.data.can_edit %}<details class="mt-3"><summary class="cursor-pointer font-medium">{% call ui::localized(rbit_localization::IssueSidebarMessage::AddRelationship.localized(page.locale)) %}{% endcall %}</summary>
+<form method="post" action="{{ relations.action }}" class="mt-3 grid min-w-0 gap-3">
+<label class="label min-w-0">{% call ui::localized(rbit_localization::IssueSidebarMessage::RelationKind.localized(page.locale)) %}{% endcall %}<select class="input mt-1" name="kind"><option value="child">{% call ui::localized(rbit_localization::IssueSidebarMessage::Subissue.localized(page.locale)) %}{% endcall %}</option><option value="blocked_by">{% call ui::localized(rbit_localization::IssueSidebarMessage::BlockedBy.localized(page.locale)) %}{% endcall %}</option></select></label>
+<label class="label min-w-0">{% call ui::localized(rbit_localization::IssueSidebarMessage::RelatedRepository.localized(page.locale)) %}{% endcall %}<input class="input mt-1" name="repository" maxlength="100"></label>
+<label class="label min-w-0">{% call ui::localized(rbit_localization::IssueSidebarMessage::RelatedNumber.localized(page.locale)) %}{% endcall %}<input class="input mt-1" name="number" type="number" min="1" required></label>
+<button class="btn w-full" type="submit">{% call ui::localized(rbit_localization::IssueSidebarMessage::AddRelationship.localized(page.locale)) %}{% endcall %}</button>
+</form></details>{% endif %}
+</section>

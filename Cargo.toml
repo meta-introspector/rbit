@@ -1,0 +1,244 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/rbit-core",
+    "crates/rbit-storage",
+    "crates/rbit-auth",
+    "crates/rbit-git",
+    "crates/rbit-transport",
+    "crates/rbit-services",
+    "crates/rbit-web",
+    "crates/rbit-server",
+    "crates/rbit-ssh",
+    "crates/rbit-mail",
+    "crates/rbit-e2e",
+    "crates/rbit-workflow",
+    "crates/rbit-runner",
+    "crates/rbit-kernel",
+    "crates/rbit-contracts",
+    "crates/rbit-localization",
+    "crates/rbit-identity",
+    "crates/rbit-identity-models",
+    "crates/rbit-access",
+    "crates/rbit-repositories",
+    "crates/rbit-collaboration",
+    "crates/rbit-actions",
+    "crates/rbit-wikis",
+    "crates/rbit-notifications",
+    "crates/rbit-platform",
+    "crates/rbit-presentation",
+    "tools/rewrite-check",
+    "tools/render-probe",
+    "tools/process-tree-probe",
+    "tools/credential-inventory",
+]
+default-members = ["crates/rbit-server"]
+# Audited upstream compatibility source, not a first-party workspace crate.
+exclude = ["vendor/rust/gix-utils", "vendor/rust/sqlx-sqlite"]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/GitRbit/rbit"
+
+[workspace.dependencies]
+# Internal crates
+rbit-kernel = { path = "crates/rbit-kernel" }
+rbit-contracts = { path = "crates/rbit-contracts", default-features = false }
+rbit-localization = { path = "crates/rbit-localization" }
+rbit-identity-models = { path = "crates/rbit-identity-models", default-features = false }
+rbit-identity = { path = "crates/rbit-identity", default-features = false }
+rbit-access = { path = "crates/rbit-access", default-features = false }
+rbit-repositories = { path = "crates/rbit-repositories", default-features = false }
+rbit-collaboration = { path = "crates/rbit-collaboration", default-features = false }
+rbit-actions = { path = "crates/rbit-actions" }
+rbit-wikis = { path = "crates/rbit-wikis", default-features = false }
+rbit-notifications = { path = "crates/rbit-notifications" }
+rbit-platform = { path = "crates/rbit-platform" }
+rbit-presentation = { path = "crates/rbit-presentation" }
+rbit-core = { path = "crates/rbit-core" }
+rbit-storage = { path = "crates/rbit-storage" }
+rbit-auth = { path = "crates/rbit-auth" }
+rbit-git = { path = "crates/rbit-git" }
+rbit-transport = { path = "crates/rbit-transport" }
+rbit-services = { path = "crates/rbit-services" }
+rbit-web = { path = "crates/rbit-web" }
+rbit-ssh = { path = "crates/rbit-ssh" }
+rbit-mail = { path = "crates/rbit-mail" }
+rbit-workflow = { path = "crates/rbit-workflow" }
+
+# Async runtime & web
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "fs", "process", "signal", "io-util", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.12", features = ["cookie", "typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "compression-full", "timeout", "set-header", "limit"] }
+futures-util = "0.3"
+async-compression = { version = "0.4", features = ["tokio", "gzip"] }
+# Static assets are compressed once at the highest quality instead of per response.
+brotli = "9"
+
+# Templates & content
+askama = "0.16"
+askama_web = { version = "0.16", features = ["axum-0.8", "tracing-0.1"] }
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
+ammonia = "4.2.5"
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+rust-embed = "8.13"
+mime_guess = "2.0"
+percent-encoding = "2.3"
+
+# Storage
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+redb = "4.4"
+
+# Git
+gix = { version = "0.90", default-features = false, features = ["revision", "blob-diff", "max-performance", "sha1"] }
+
+similar = "3.2"
+same-file = "1.0"
+
+# Crypto
+argon2 = { version = "0.6", features = ["zeroize"] }
+sha2 = "0.11"
+getrandom = { version = "0.4", features = ["std"] }
+base64 = "0.23"
+subtle = "2.6"
+# At-rest encryption of stored credentials (rbit-storage `sealing`). Already in the tree
+# through ssh-cipher; only AES itself and the allocating API are needed.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+
+# Serialisation, config, CLI
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5"
+semver = "1.0.28"
+postcard = { version = "1.1", features = ["use-std"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+
+# Errors, logging, time
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
+mimalloc = "0.1"
+
+# Milestone 1 — each workstream adds its dependencies in its own block below.
+# --- S: security (rate limiting, TOTP) ---
+hmac = "0.13"
+sha1 = "0.11"
+qrcode = { version = "0.14", default-features = false }
+# Passkey signatures (ES256, EdDSA, RS256); all three are already in the tree through SSH.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+ed25519-dalek = { version = "3.0", default-features = false }
+rsa = { version = "=0.10.0-rc.18", default-features = false, features = ["std"] }
+# --- E: email & recovery ---
+lettre = { version = "0.11.24", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1-rustls-tls"] }
+# --- H: SSH ---
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "alloc", "ecdsa"] }
+# --- O: operations (metrics, jobs) ---
+metrics = "0.24"
+# Only the recorder and text renderer: `/metrics` is served by our own router.
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+# --- T: end-to-end tests ---
+reqwest = { version = "0.13", default-features = false, features = ["cookies", "form"] }
+proptest = "1"
+
+# Milestone 2 wave A — each workstream adds its dependencies in its own block below.
+# --- A: access (collaborators, teams, transfer) ---
+# --- W: API & webhooks ---
+# The webhook client's TLS: rustls with the `ring` provider (as lettre and russh use), so
+# Windows builds need neither CMake nor NASM.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# --- R: repository essentials (archives, releases, blame, compare, forks, mirrors) ---
+
+# --- Actions ---
+# GitHub filter patterns compile to anchored expressions; regex-automata is already in the
+# tree (through fancy-regex and tracing-subscriber), so the patterns add no crate.
+regex-automata = "0.4"
+# Workflow files: a panic-free YAML deserializer with budgets (depth, nodes, alias replays)
+# and source locations. Only its deserializer: rbit-workflow reads YAML and writes none.
+serde-saphyr = { version = "2.0", default-features = false, features = ["deserialize"] }
+# Secrets in job specifications and runner messages are zeroed on drop; zeroize is already
+# in the tree through argon2.
+zeroize = "1.9"
+# rbit-runner's runner.toml is read and written as a document of its own; toml 0.8 is
+# already in the tree through figment, so writing it adds no crate.
+toml = "1.2"
+# rbit-runner's Windows Service (`rbit-runner install --mode service`), without unsafe code.
+windows-service = "0.8"
+# rbit-runner and the server's second pass mask every secret with one Aho-Corasick automaton
+# per task; aho-corasick is already in the tree (through regex), so masking adds no crate.
+aho-corasick = "1.1"
+# rbit-runner's local cache stores tar.gz archives, runner bodies may arrive gzipped and the
+# server gzips finished task logs. flate2 is already in the tree (through async-compression);
+# tar is new, without its xattr feature, and brings no other crate. The server reads stored
+# artifacts with it to serve them as zip archives.
+flate2 = "1.1"
+tar = { version = "0.4", default-features = false }
+# rbit-runner opens files a container job can write with `O_NOFOLLOW`; libc is already in the
+# tree (through tokio and getrandom), so this adds no crate.
+libc = "0.2"
+
+# Testing
+tempfile = "3"
+# A zip reader for the tests of the server's zip artifact downloads, which are written
+# without it.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+# File and line numbers for backtraces and panics, without the variable-level debug info
+# that makes rbit-web and every test binary slower to generate and link.
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.build-override]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# Dependencies (gix, syntect, argon2) are dramatically faster when optimised,
+# while our own crates stay quick to rebuild.
+opt-level = 2
+debug = false
+
+# The "*" override above also applies to proc-macro dependencies, ahead of build-override.
+# syn and its helpers only run inside the compiler, where optimising them costs far more
+# build time (syn is on the critical path to rbit-web) than it saves in macro expansion.
+[profile.dev.package.syn]
+opt-level = 0
+[profile.dev.package.quote]
+opt-level = 0
+[profile.dev.package.proc-macro2]
+opt-level = 0
+
+[patch.crates-io]
+# Preserve existing Git ref precomposition with Unicode 17 tables.
+gix-utils = { path = "vendor/rust/gix-utils" }
+
+# Synchronize process-wide SQLite initialization before every native connection open.
+sqlx-sqlite = { path = "vendor/rust/sqlx-sqlite" }

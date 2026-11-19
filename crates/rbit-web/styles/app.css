@@ -1,0 +1,1973 @@
+/*
+ * rbit design system — monochrome minimal. Tailwind CSS v4, CSS-first configuration.
+ *
+ * Principles
+ *   - Black and white do the work. Colour appears only to communicate state
+ *     (success, danger, warning) and in syntax highlighting.
+ *   - Hairline (1px) borders instead of shadows; 6px radius everywhere.
+ *   - Dense, calm typography: 14px base, medium weights, tight headings.
+ *
+ * Every colour is a semantic token defined once with `light-dark()`, so components never
+ * need `dark:` variants. The scheme follows the OS unless `data-theme` on <html> pins it.
+ */
+@import "tailwindcss";
+@import "./repo-documents.css";
+@import "./direction.css";
+@import "./scripts.css";
+/* Single pages and script-opened dialogs are in deferred.css, linked rather than inlined. */
+@plugin "@tailwindcss/typography";
+
+@source "../templates";
+@source "../src";
+
+/* Contribution calendars share semantic theme colors with the rest of the UI. */
+.contribution-calendar { display: block; width: 100%; }
+.contribution-quarters { display: none; }
+.contribution-calendar text, .contribution-quarters text { fill: var(--ink-muted); font-size: 10px; }
+.contribution-quarters text { font-size: 12px; }
+.contribution-quarters svg { display: block; width: 100%; min-width: 0; }
+@media (max-width: 640px) {
+  .contribution-year { display: none; }
+  .contribution-quarters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+}
+@media (max-width: 400px) {
+  .contribution-quarters { grid-template-columns: minmax(0, 1fr); }
+}
+.contribution-level-0 { fill: var(--hover); background: var(--hover); }
+.contribution-level-1 { fill: color-mix(in srgb, var(--success) 25%, var(--surface)); background: color-mix(in srgb, var(--success) 25%, var(--surface)); }
+.contribution-level-2 { fill: color-mix(in srgb, var(--success) 50%, var(--surface)); background: color-mix(in srgb, var(--success) 50%, var(--surface)); }
+.contribution-level-3 { fill: color-mix(in srgb, var(--success) 75%, var(--surface)); background: color-mix(in srgb, var(--success) 75%, var(--surface)); }
+.contribution-level-4 { fill: var(--success); background: var(--success); }
+.contribution-calendar rect:focus, .contribution-quarters rect:focus { outline: 2px solid var(--ink); outline-offset: 1px; }
+.contribution-calendar rect, .contribution-quarters rect { cursor: pointer; }
+[data-contribution-day][aria-pressed="true"] { stroke: var(--ink); stroke-width: 2; paint-order: stroke fill; }
+.contribution-tooltip { position: fixed; z-index: 60; pointer-events: none; max-width: calc(100vw - 16px); padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 12px; box-shadow: 0 3px 12px rgb(0 0 0 / 15%); }
+.contribution-tooltip[hidden] { display: none; }
+.contribution-selection { font-size: 13px; }
+.contribution-legend { display: flex; align-items: center; gap: 4px; }
+.contribution-legend i { width: 12px; height: 12px; border-radius: 2px; }
+.contribution-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.contribution-stats dt { color: var(--ink-muted); font-size: 12px; }
+.contribution-stats dd { margin-top: 4px; font-size: 18px; font-weight: 600; }
+.contribution-months { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; }
+.contribution-months > div { display: flex; flex-direction: column; align-items: center; }
+.contribution-months svg { width: 100%; max-width: 48px; }
+@media (max-width: 480px) {
+  .contribution-stats { grid-template-columns: repeat(2, 1fr); }
+  .contribution-months { grid-template-columns: repeat(6, 1fr); }
+}
+
+/* ---------------------------------------------------------------- Tokens */
+
+/*
+ * The built-in rbit themes. `data-theme` selects one: none (or "system") follows the
+ * OS, "light"/"dark" pin a scheme, and tinted themes (assets/themes/*.css, linked only
+ * while active) redefine the same tokens under `[data-theme="base16-…"]`. Selectors are
+ * scoped rather than root-only so a preview card carrying `data-theme` renders in that
+ * theme anywhere on the page.
+ *
+ * Two elevation levels: the page `--canvas` and containers `--surface`, separated by a
+ * `--line` that stays clearly visible (≥ 1.3:1 against the surface). Body text (`--ink`,
+ * `--ink-muted`) meets WCAG AA on every background. `--ink-faint` is for hints and metadata,
+ * but it still clears 4.5:1 on every background (hover included): it carries timestamps,
+ * commit ids and diff hunk headers.
+ * `src/themes/mod.rs` mirrors the two canvas colours for `<meta name="theme-color">`.
+ */
+/* Reset optional accessibility cues at each theme boundary, including preview cards. */
+:root, [data-theme] {
+  --diff-add-fill: initial;
+  --diff-del-fill: initial;
+  --diff-add-rail: initial;
+  --diff-del-rail: initial;
+  --status-border: initial;
+  --deleted-border-style: initial;
+  --syntax-keyword-weight: initial;
+  --graph-color-0: initial;
+  --graph-dash-0: initial;
+  --graph-color-1: initial;
+  --graph-dash-1: initial;
+  --graph-color-2: initial;
+  --graph-dash-2: initial;
+  --graph-color-3: initial;
+  --graph-dash-3: initial;
+  --graph-color-4: initial;
+  --graph-dash-4: initial;
+  --graph-color-5: initial;
+  --graph-dash-5: initial;
+  --graph-color-6: initial;
+  --graph-dash-6: initial;
+  --graph-color-7: initial;
+  --graph-dash-7: initial;
+}
+
+:root,
+[data-theme="system"],
+[data-theme="light"],
+[data-theme="dark"] {
+  --canvas: light-dark(#f7f7f7, #000000);
+  --surface: light-dark(#ffffff, #0d0d0d);
+  --subtle: light-dark(#fafafa, #141414);
+  --hover: light-dark(#f0f0f0, #1c1c1c);
+  --line: light-dark(#e3e3e3, #2a2a2a);
+  --line-strong: light-dark(#cccccc, #3d3d3d);
+  --ink: light-dark(#0a0a0a, #ededed);
+  --ink-muted: light-dark(#5c5c5c, #a3a3a3);
+  --ink-faint: light-dark(#6b6b6b, #858585);
+  /* "Inverted" is the primary action: black on light, white on dark. */
+  --inverted: light-dark(#0a0a0a, #ededed);
+  --inverted-hover: light-dark(#383838, #cccccc);
+  --inverted-ink: light-dark(#ffffff, #0a0a0a);
+
+  --success: light-dark(#107d32, #3ecf6e);
+  --danger: light-dark(#d8182f, #ff5a67);
+  --danger-subtle: light-dark(#fff0f1, #1f0a0c);
+  --warning: light-dark(#a35200, #f5a524);
+
+  --syntax-comment: light-dark(#6b6b6b, #858585);
+  --syntax-keyword: light-dark(#c3195d, #ff4d8d);
+  --syntax-string: light-dark(#107d32, #62c073);
+  --syntax-number: light-dark(#0068d6, #52a8ff);
+  --syntax-function: light-dark(#7820bc, #bf7af0);
+  --syntax-type: light-dark(#0068d6, #52a8ff);
+  --syntax-tag: light-dark(#107d32, #62c073);
+  --syntax-attribute: light-dark(#7820bc, #bf7af0);
+}
+
+:root,
+[data-theme="system"] { color-scheme: light dark; }
+[data-theme="light"] { color-scheme: light; }
+[data-theme="dark"] { color-scheme: dark; }
+
+/*
+ * The DNA themes: the DNA desktop app's palette (deep neutral with a helix-teal accent, and
+ * its light counterpart), mapped onto the same tokens. The primary action is the teal accent
+ * instead of black/white; status and syntax colours are picked to sit with it. Same contrast
+ * rules as above. `src/themes/mod.rs` mirrors the canvas colours.
+ */
+/* System follows the default DNA light/dark pair. Explicit light/dark slugs keep Classic. */
+:root:not([data-theme]),
+[data-theme="system"] {
+  --canvas: light-dark(#f5f7f9, #141516);
+  --surface: light-dark(#ffffff, #1d1e20);
+  --subtle: light-dark(#f9fafc, #1f2024);
+  --hover: light-dark(#eef0f3, #222429);
+  --line: light-dark(#dfe1e4, #313335);
+  --line-strong: light-dark(#c8cbce, #434549);
+  --ink: light-dark(#13161b, #eceff1);
+  --ink-muted: light-dark(#4c5057, #95999d);
+  --ink-faint: light-dark(#5f636a, #898c91);
+  --inverted: light-dark(#00785f, #77d2ba);
+  --inverted-hover: light-dark(#00654f, #98e3ce);
+  --inverted-ink: light-dark(#f7fbfa, #06120f);
+  --success: light-dark(#137738, #6cd092);
+  --danger: light-dark(#c51e21, #f66d67);
+  --danger-subtle: light-dark(#fff0ee, #2f1c1a);
+  --warning: light-dark(#a05600, #f0ba59);
+  --syntax-comment: light-dark(#5f636a, #898c91);
+  --syntax-keyword: light-dark(#00785f, #77d2ba);
+  --syntax-string: light-dark(#27762f, #8bd28d);
+  --syntax-number: light-dark(#0065b4, #74c2ee);
+  --syntax-function: light-dark(#7347af, #bcabf1);
+  --syntax-type: light-dark(#8e5400, #e9c67d);
+  --syntax-tag: light-dark(#be2f2c, #f28881);
+  --syntax-attribute: light-dark(#007187, #7ccdd6);
+}
+
+[data-theme="dna-dark"] {
+  color-scheme: dark;
+  --canvas: #141516;
+  --surface: #1d1e20;
+  --subtle: #1f2024;
+  --hover: #222429;
+  --line: #313335;
+  --line-strong: #434549;
+  --ink: #eceff1;
+  --ink-muted: #95999d;
+  --ink-faint: #898c91;
+  --inverted: #77d2ba;
+  --inverted-hover: #98e3ce;
+  --inverted-ink: #06120f;
+  --success: #6cd092;
+  --danger: #f66d67;
+  --danger-subtle: #2f1c1a;
+  --warning: #f0ba59;
+  --syntax-comment: #898c91;
+  --syntax-keyword: #77d2ba;
+  --syntax-string: #8bd28d;
+  --syntax-number: #74c2ee;
+  --syntax-function: #bcabf1;
+  --syntax-type: #e9c67d;
+  --syntax-tag: #f28881;
+  --syntax-attribute: #7ccdd6;
+}
+
+[data-theme="dna-day"] {
+  color-scheme: light;
+  --canvas: #f5f7f9;
+  --surface: #ffffff;
+  --subtle: #f9fafc;
+  --hover: #eef0f3;
+  --line: #dfe1e4;
+  --line-strong: #c8cbce;
+  --ink: #13161b;
+  --ink-muted: #4c5057;
+  --ink-faint: #5f636a;
+  --inverted: #00785f;
+  --inverted-hover: #00654f;
+  --inverted-ink: #f7fbfa;
+  --success: #137738;
+  --danger: #c51e21;
+  --danger-subtle: #fff0ee;
+  --warning: #a05600;
+  --syntax-comment: #5f636a;
+  --syntax-keyword: #00785f;
+  --syntax-string: #27762f;
+  --syntax-number: #0065b4;
+  --syntax-function: #7347af;
+  --syntax-type: #8e5400;
+  --syntax-tag: #be2f2c;
+  --syntax-attribute: #007187;
+}
+
+/* Colorblind variants retain rbit surfaces and hairlines, with accents from the Okabe-Ito
+ * palette: blue additions and actions, orange deletions, reddish-purple warnings, and
+ * blue/green/sky/purple/orange syntax. Each accent is the most vivid shade of its hue that
+ * stays readable on every surface and diff fill, including under red/green simulation.
+ * Opaque diff fills, solid/dashed rails and deletion hatching reinforce the existing text
+ * and icons without requiring hue recognition. Full tokens and boundary resets keep
+ * gallery previews isolated. */
+[data-theme="colorblind-light"] {
+  color-scheme: light;
+  --canvas: #f5f7f9;
+  --surface: #ffffff;
+  --subtle: #f9fafc;
+  --hover: #eef0f3;
+  --line: #dfe1e4;
+  --line-strong: #7f8999;
+  --ink: #13161b;
+  --ink-muted: #354052;
+  --ink-faint: #4c5668;
+  --inverted: #285ebe;
+  --inverted-hover: #1f4c9c;
+  --inverted-ink: #ffffff;
+  --success: #285ebe;
+  --danger: #a54900;
+  --danger-subtle: #fdecdc;
+  --warning: #a53a8c;
+  --syntax-comment: #4c5668;
+  --syntax-keyword: #285ebe;
+  --syntax-string: #007354;
+  --syntax-number: #a53a8c;
+  --syntax-function: #336a89;
+  --syntax-type: #a54900;
+  --syntax-tag: #285ebe;
+  --syntax-attribute: #007354;
+  --diff-add-fill: #e8f1fc;
+  --diff-del-fill: #fdecdc;
+  --diff-add-rail: inset 3px 0 0 var(--success);
+  --diff-del-rail: repeating-linear-gradient(to bottom, var(--danger) 0 5px, transparent 5px 9px);
+  --status-border: currentColor;
+  --deleted-border-style: dashed;
+  --syntax-keyword-weight: 700;
+  --graph-color-0: var(--success);
+  --graph-dash-0: none;
+  --graph-color-1: var(--danger);
+  --graph-dash-1: 8 3;
+  --graph-color-2: var(--warning);
+  --graph-dash-2: 2 3;
+  --graph-color-3: var(--syntax-function);
+  --graph-dash-3: 8 3 2 3;
+  --graph-color-4: var(--ink);
+  --graph-dash-4: 12 4;
+  --graph-color-5: var(--ink-muted);
+  --graph-dash-5: 1 3;
+  --graph-color-6: var(--syntax-string);
+  --graph-dash-6: 6 2 1 2;
+  --graph-color-7: var(--syntax-attribute);
+  --graph-dash-7: 12 3 1 3 1 3;
+}
+
+[data-theme="colorblind-dark"] {
+  color-scheme: dark;
+  --canvas: #141516;
+  --surface: #1d1e20;
+  --subtle: #1f2024;
+  --hover: #222429;
+  --line: #313335;
+  --line-strong: #6b7584;
+  --ink: #eceff1;
+  --ink-muted: #c0c7d1;
+  --ink-faint: #acb6c4;
+  --inverted: #a8cdff;
+  --inverted-hover: #c8dfff;
+  --inverted-ink: #101c2b;
+  --success: #5499ff;
+  --danger: #e18b47;
+  --danger-subtle: #3a2412;
+  --warning: #cb81ba;
+  --syntax-comment: #acb6c4;
+  --syntax-keyword: #5499ff;
+  --syntax-string: #22ab86;
+  --syntax-number: #cb81ba;
+  --syntax-function: #56b4e9;
+  --syntax-type: #e18b47;
+  --syntax-tag: #5499ff;
+  --syntax-attribute: #22ab86;
+  --diff-add-fill: #162a40;
+  --diff-del-fill: #3a2412;
+  --diff-add-rail: inset 3px 0 0 var(--success);
+  --diff-del-rail: repeating-linear-gradient(to bottom, var(--danger) 0 5px, transparent 5px 9px);
+  --status-border: currentColor;
+  --deleted-border-style: dashed;
+  --syntax-keyword-weight: 700;
+  --graph-color-0: var(--success);
+  --graph-dash-0: none;
+  --graph-color-1: var(--danger);
+  --graph-dash-1: 8 3;
+  --graph-color-2: var(--warning);
+  --graph-dash-2: 2 3;
+  --graph-color-3: var(--syntax-function);
+  --graph-dash-3: 8 3 2 3;
+  --graph-color-4: var(--ink);
+  --graph-dash-4: 12 4;
+  --graph-color-5: var(--ink-muted);
+  --graph-dash-5: 1 3;
+  --graph-color-6: var(--syntax-string);
+  --graph-dash-6: 6 2 1 2;
+  --graph-color-7: var(--syntax-attribute);
+  --graph-dash-7: 12 3 1 3 1 3;
+}
+
+@theme {
+  --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, Consolas, monospace;
+
+  --radius-ui: 6px;
+}
+
+/* `inline`: utilities read the semantic tokens where they are used (`var(--canvas)`), not a
+   copy resolved once on :root, so an element carrying `data-theme` recolours its subtree. */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-subtle: var(--subtle);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-inverted: var(--inverted);
+  --color-inverted-hover: var(--inverted-hover);
+  --color-inverted-ink: var(--inverted-ink);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-danger-subtle: var(--danger-subtle);
+  --color-warning: var(--warning);
+}
+
+/* ---------------------------------------------------------------- Base */
+
+@layer base {
+  html {
+    /* Always reserve the scrollbar's width so short and long pages share one layout width. */
+    scrollbar-gutter: stable;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-sm text-ink antialiased;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ink;
+  }
+
+  ::selection {
+    @apply bg-inverted text-inverted-ink;
+  }
+
+  /* Scrollbars: a thin thumb in the line colour on a clear track, darkening while the
+     pointer is over the page, so they recolour with every theme. `scrollbar-color` is
+     inherited, so the root's hover state sets it for every scrolling box: whenever any
+     element is hovered, so is <html>. Matching `:hover` on <html> alone (not `*:hover`)
+     keeps pointer moves from restyling every element they enter and leave. The
+     `::-webkit-scrollbar` rules serve browsers without the standard properties (Safari)
+     and are ignored by those that have them. */
+  html {
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  html:hover {
+    scrollbar-color: var(--ink-faint) transparent;
+  }
+
+  * {
+    scrollbar-width: thin;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background: var(--line-strong) padding-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--ink-faint);
+  }
+
+  a {
+    @apply transition-colors duration-100;
+  }
+}
+
+/* ---------------------------------------------------------------- Components */
+
+@layer components {
+  /* Bordered container. */
+  .box {
+    @apply rounded-(--radius-ui) border border-line bg-surface;
+  }
+
+  .box-header {
+    @apply flex min-h-11 items-center gap-3 border-b border-line bg-subtle px-4;
+  }
+
+  /* Section title inside a .box-header. */
+  .box-title {
+    @apply text-[13px] font-medium text-ink;
+  }
+
+  /* A padded container with an even hairline border on every side: the surface of a
+     single-purpose page (sign in, recovery, errors) set apart from the canvas. */
+  .card {
+    @apply rounded-(--radius-ui) border border-line-strong bg-surface p-5 sm:p-7;
+  }
+
+  /* Bordered square holding an icon or the logo, e.g. above a page title. */
+  .tile {
+    @apply grid size-10 shrink-0 place-items-center rounded-(--radius-ui) border border-line bg-surface text-ink;
+  }
+
+  /* Single-form pages: a narrow centred column with a heading, a .card and an aside. */
+  .auth-shell {
+    @apply mx-auto flex w-full max-w-[24rem] flex-col py-4 sm:py-12;
+  }
+
+  .auth-head {
+    @apply mb-6 flex flex-col items-center text-center;
+  }
+
+  .auth-title {
+    @apply mt-5 text-xl font-semibold tracking-tight text-balance;
+  }
+
+  .auth-lede {
+    @apply mt-1.5 max-w-xs text-[13px] text-ink-muted text-balance;
+  }
+
+  /* The "Don't have an account? / Already have one?" line under an auth card. */
+  .auth-aside {
+    @apply mt-3 rounded-(--radius-ui) border border-line px-4 py-3.5 text-center text-[13px] text-ink-muted;
+  }
+
+  /* A list narrowed by an instant filter (assets/filter.js hides rows): the last row
+     still showing drops its divider so it never doubles the container's border. */
+  .filter-list > li:not([hidden]):not(:has(~ li:not([hidden]))) {
+    @apply border-b-0;
+  }
+
+  /* A neutral or success message; errors use the `form_error` macro. */
+  .notice {
+    @apply flex items-start gap-2.5 rounded-(--radius-ui) border border-line bg-subtle px-3 py-2.5 text-[13px] text-ink-muted;
+  }
+
+  /* Buttons: 36px on touch screens, 32px from `sm` up. */
+  .btn {
+    @apply inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-(--radius-ui) border
+      border-line bg-surface px-3 text-[13px] font-medium text-ink transition-colors duration-100 select-none
+      hover:border-line-strong hover:bg-hover disabled:pointer-events-none disabled:opacity-50 sm:h-8;
+  }
+
+  .btn-primary {
+    @apply border-inverted bg-inverted text-inverted-ink hover:border-inverted-hover hover:bg-inverted-hover;
+  }
+
+  /* Destructive actions: red text and border, a faint red wash on hover. */
+  .btn-danger {
+    @apply border-danger/40 text-danger hover:border-danger hover:bg-danger-subtle;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink-muted hover:border-transparent hover:bg-hover hover:text-ink;
+  }
+
+  .btn-icon {
+    @apply w-9 px-0 sm:w-8;
+  }
+
+  .btn-lg {
+    @apply h-10 px-4 text-sm sm:h-10;
+  }
+
+  .input {
+    @apply block h-10 w-full rounded-(--radius-ui) border border-line-strong bg-surface px-3 text-sm text-ink transition-colors
+      duration-100 placeholder:text-ink-faint hover:border-ink-faint focus:border-ink focus:outline-none sm:h-9;
+  }
+
+  .label {
+    @apply mb-1.5 block text-[13px] font-medium text-ink;
+  }
+
+  .hint {
+    @apply mt-1.5 text-xs text-ink-faint;
+  }
+
+  .badge {
+    @apply inline-flex h-5 items-center gap-1 rounded-full border border-line px-2 text-[11px] font-medium text-ink-muted;
+  }
+
+  .link {
+    @apply text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink;
+  }
+
+  .kbd {
+    @apply rounded border border-line bg-subtle px-1.5 font-mono text-[11px] text-ink-muted;
+  }
+
+  /* Underline tabs (sub-navigation). */
+  .tab {
+    @apply relative inline-flex h-11 shrink-0 items-center gap-1.5 px-1 text-[13px] text-ink-muted transition-colors
+      duration-100 hover:text-ink;
+  }
+
+  .tab[aria-current="page"],
+  .tab[aria-selected="true"] {
+    @apply text-ink after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-ink;
+  }
+
+  /* Rows of a list or table inside a .box. */
+  /* Horizontally scrollable tab rows: no scrollbar, and on narrow screens a soft fade
+     at the end edge (left in right-to-left pages) so cut-off tabs read as "more to scroll"
+     rather than clipped. */
+  .scroll-tabs {
+    @apply overflow-x-auto;
+    scrollbar-width: none;
+  }
+
+  @media (width < 64rem) {
+    .scroll-tabs {
+      mask-image: linear-gradient(to var(--inline-end), #000 calc(100% - 2rem), transparent);
+    }
+  }
+
+  /* Wrap filter menus on phones so their dropdowns can leave the bar. */
+  @media (width < 40rem) {
+    .scroll-tabs:has(> details[data-menu]) {
+      flex-wrap: wrap;
+      overflow: visible;
+      mask-image: none;
+    }
+  }
+
+  /* The repository header (repo/subnav.html). Phones: the name with the star, fork and
+     clone buttons beside it, then the tabs edge to edge. From `md` the name is in the top
+     bar and the tabs share one row with the buttons. */
+  .repo-subnav {
+    @apply grid items-center gap-x-3;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions" "tabs tabs";
+  }
+
+  .repo-title {
+    @apply min-w-0 py-3 leading-tight;
+    grid-area: title;
+  }
+
+  .repo-actions { grid-area: actions; }
+
+  .repo-tabs {
+    @apply -mx-4 px-4 sm:-mx-6 sm:px-6;
+    grid-area: tabs;
+  }
+
+  @media (width >= 48rem) {
+    .repo-subnav {
+      @apply gap-x-5;
+      grid-template-areas: "tabs actions";
+    }
+
+    .repo-title { @apply hidden; }
+
+    .repo-tabs { @apply mx-0 px-0; }
+  }
+
+  /* The repository home's sidebar (repo/tree.html): beside the files on large screens,
+     after the README on smaller ones, where the About section moves above the files. */
+  .repo-aside {
+    @apply space-y-5 border-t border-line pt-5 lg:border-t-0 lg:pt-0;
+  }
+
+  .aside-section {
+    @apply border-t border-line pt-5;
+  }
+
+  @media (width < 64rem) {
+    .repo-aside:not(:has(> .aside-section)) { @apply hidden; }
+
+    /* The first section showing follows the hidden About one. */
+    .repo-aside > section.hidden + .aside-section { @apply border-t-0 pt-0; }
+  }
+
+  .row {
+    @apply flex min-h-10 items-center gap-3 border-b border-line px-4 last:border-b-0;
+  }
+
+  .row-link {
+    @apply hover:bg-subtle;
+  }
+
+  .avatar {
+    @apply inline-flex shrink-0 select-none items-center justify-center rounded-full border border-line font-medium
+      uppercase leading-none;
+  }
+
+  /* Eight neutral avatar tones, chosen by account id or author email (views::components::Avatar).
+     Derived from the tokens, so every theme gets its own tinted greys. */
+  .avatar-0 { background: var(--hover); color: var(--ink); }
+  .avatar-1 { background: color-mix(in oklab, var(--ink) 12%, var(--surface)); color: var(--ink); }
+  .avatar-2 { background: color-mix(in oklab, var(--ink) 22%, var(--surface)); color: var(--ink); }
+  .avatar-3 { background: var(--inverted); color: var(--inverted-ink); }
+  .avatar-4 { background: color-mix(in oklab, var(--ink) 75%, var(--surface)); color: var(--inverted-ink); }
+  .avatar-5 { background: var(--subtle); color: var(--ink-muted); }
+  .avatar-6 { background: color-mix(in oklab, var(--ink) 88%, var(--surface)); color: var(--inverted-ink); }
+  .avatar-7 { background: var(--ink-muted); color: var(--surface); }
+
+  /* Never wider than the screen, whatever width a menu asks for. */
+  .menu {
+    @apply absolute z-40 mt-1.5 min-w-52 max-w-[calc(100vw-2rem)] overflow-hidden rounded-(--radius-ui) border border-line
+      bg-surface p-1 shadow-[0_4px_16px_rgb(0_0_0/0.08)];
+  }
+
+  /* 40px rows on touch screens, 32px from `sm` up. */
+  .menu-item {
+    @apply flex h-10 w-full items-center gap-2.5 rounded px-2.5 text-start text-sm text-ink hover:bg-hover sm:h-8 sm:gap-2
+      sm:text-[13px];
+  }
+
+  /* A menu row's leading icon. */
+  .menu-icon {
+    @apply size-4 shrink-0 text-ink-muted;
+  }
+
+  .menu-label {
+    @apply px-2.5 pb-1 pt-2 text-[11px] font-medium text-ink-faint;
+  }
+
+  .menu-divider {
+    @apply -mx-1 my-1 h-px bg-line;
+  }
+
+  /* "Go to file": the highlighted result and the characters that matched. */
+  .file-finder [aria-selected="true"] > .menu-item {
+    @apply bg-hover;
+  }
+
+  .file-finder-match {
+    @apply bg-transparent font-semibold text-ink underline underline-offset-2;
+  }
+
+  /* <details> based dropdowns: no JavaScript required. */
+  details > summary {
+    list-style: none;
+  }
+
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .prose-rbit {
+    @apply prose prose-sm max-w-none prose-headings:scroll-mt-20 prose-headings:font-semibold
+      prose-headings:tracking-tight prose-h1:text-2xl prose-h2:border-b prose-h2:border-line prose-h2:pb-2
+      prose-a:font-normal prose-a:underline-offset-4 prose-pre:rounded-(--radius-ui) prose-pre:border
+      prose-pre:border-line prose-pre:bg-subtle prose-pre:text-ink prose-code:font-normal prose-code:before:content-none
+      prose-code:after:content-none prose-img:inline prose-img:my-0;
+    --tw-prose-body: var(--ink);
+    --tw-prose-headings: var(--ink);
+    --tw-prose-bold: var(--ink);
+    --tw-prose-links: var(--ink);
+    --tw-prose-code: var(--ink);
+    --tw-prose-quotes: var(--ink-muted);
+    --tw-prose-quote-borders: var(--line-strong);
+    --tw-prose-hr: var(--line);
+    --tw-prose-bullets: var(--ink-faint);
+    --tw-prose-counters: var(--ink-faint);
+    --tw-prose-th-borders: var(--line-strong);
+    --tw-prose-td-borders: var(--line);
+  }
+
+  /* Long words and URLs wrap instead of widening the page; wide tables scroll. */
+  .prose-rbit {
+    overflow-wrap: break-word;
+  }
+
+  .prose-rbit a,
+  .prose-rbit :not(pre) > code {
+    overflow-wrap: anywhere;
+  }
+
+  .prose-rbit table {
+    @apply block max-w-full overflow-x-auto;
+  }
+
+  .prose-rbit :not(pre) > code {
+    @apply rounded border border-line bg-subtle px-1 py-0.5 text-[0.85em];
+  }
+
+  /* `prose-sm`'s `code` size comes after `prose`'s `pre code { font-size: inherit }` and would
+     shrink code blocks a second time, to ~10px. */
+  .prose-rbit pre code {
+    font-size: inherit;
+  }
+
+  /* ------------------------------------------------ Issues and pull requests (wave B) */
+
+  /* Thread state, beside a title: open, closed, merged, draft. Colour only from tokens. */
+  .state-badge {
+    @apply inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium whitespace-nowrap;
+  }
+
+  .state-badge-open {
+    border-color: color-mix(in oklab, var(--success) 45%, transparent);
+    background: color-mix(in oklab, var(--success) 9%, var(--surface));
+    color: var(--success);
+  }
+
+  .state-badge-closed {
+    @apply border-line bg-subtle text-ink-muted;
+  }
+
+  .state-badge-merged {
+    @apply border-inverted bg-inverted text-inverted-ink;
+  }
+
+  .state-badge-draft {
+    @apply border-dashed border-ink-faint bg-transparent text-ink-faint;
+  }
+
+  /* A label: ink on surface with the label's colour only as an SVG dot (`fill`), so it is
+     legible in every theme. */
+  .label-chip {
+    @apply inline-flex h-5 max-w-full items-center gap-1 rounded-full border border-line bg-surface px-2 text-[11px]
+      font-medium text-ink;
+  }
+
+  .label-chip > svg {
+    @apply size-2 shrink-0;
+  }
+
+  /* The conversation: items on a vertical rule. */
+  .timeline {
+    @apply relative flex flex-col gap-4;
+  }
+
+  .timeline::before {
+    content: "";
+    @apply absolute inset-y-0 inset-s-4 w-px bg-line;
+  }
+
+  .timeline-item {
+    @apply relative flex min-w-0 gap-3;
+  }
+
+  /* A small event row ("alice added the bug label"): icon in a circle on the rule. */
+  .timeline-event {
+    @apply relative flex min-h-8 min-w-0 items-center gap-2 ps-1 text-[13px] text-ink-muted;
+  }
+
+  .timeline-badge {
+    @apply relative z-10 inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-line bg-canvas
+      text-ink-muted;
+  }
+
+  /* The unread indicator on the header's bell. */
+  .notification-dot {
+    @apply pointer-events-none absolute inset-e-1.5 top-1.5 size-2 rounded-full border border-canvas bg-inverted;
+  }
+}
+
+/* ---------------------------------------------------------------- Syntax highlighting */
+
+/* render/highlight.rs resolves each token's scopes to at most one colour class plus
+   b (semibold) and i (italic), on flat spans; unstyled text has no span. The classes are
+   one letter to keep large files small, so they apply only inside highlighted code
+   (`.line-code`); `:where()` keeps the specificity of the bare classes. */
+:where(.line-code) .c { color: var(--syntax-comment); }
+:where(.line-code) .s { color: var(--syntax-string); }
+:where(.line-code) .n { color: var(--syntax-number); }
+:where(.line-code) .k { color: var(--syntax-keyword); font-weight: var(--syntax-keyword-weight, inherit); }
+:where(.line-code) .f { color: var(--syntax-function); }
+:where(.line-code) .t { color: var(--syntax-type); }
+:where(.line-code) .g { color: var(--syntax-tag); }
+:where(.line-code) .a { color: var(--syntax-attribute); }
+:where(.line-code) .h { color: var(--ink); font-weight: 600; }
+:where(.line-code) .x { color: var(--danger); }
+:where(.line-code) .b { font-weight: 600; }
+:where(.line-code) .i { font-style: italic; }
+
+/* ---------------------------------------------------------------- Scheme-dependent visibility */
+
+/* `.when-dark` / `.when-light` show content only in that colour scheme (e.g. theme menu icons).
+   `data-scheme` on <html> is the pinned theme's variant; without it the OS decides. */
+.when-dark { display: none; }
+:root[data-scheme="dark"] .when-dark { display: inline; }
+:root[data-scheme="dark"] .when-light { display: none; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-scheme]) .when-dark { display: inline; }
+  :root:not([data-scheme]) .when-light { display: none; }
+}
+
+/* ---------------------------------------------------------------- htmx progress bar */
+
+/* Shown while a navigation is in flight (`nav-busy` on <html>, set by nav.js) or while an
+   element using it as its hx-indicator is busy. It fades in only after 150 ms, so fast
+   (and preloaded) navigations show nothing at all, and it hides instantly. Fixed and
+   out of flow: it never shifts the layout. */
+#page-progress {
+  opacity: 0;
+  transition: opacity 0s;
+}
+
+.nav-busy #page-progress,
+#page-progress.htmx-request {
+  opacity: 1;
+  transition: opacity 0.2s ease-out 150ms;
+  animation: page-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes page-progress {
+  from { transform: translateX(calc(-100% * var(--inline-sign))); }
+  to { transform: translateX(calc(400% * var(--inline-sign))); }
+}
+
+/* ---------------------------------------------------------------- Sticky header */
+
+/* The top bar always sticks. A page's tabs (`.site-subnav`, after the header) stick right
+   under it from `md` up, reading as one block with it; on phones they scroll away so the
+   page keeps the room. `--sticky-top` is where other sticky things (diff file headers,
+   linked code lines) sit: below the bar, plus the tabs where those stick. app.js keeps
+   both bar heights current, including fractional pixels at browser zoom. */
+:root {
+  /* The top bar with its bottom border. */
+  --bar-height: calc(3rem + 1px + env(safe-area-inset-top));
+  --sticky-top: var(--bar-height);
+}
+
+.site-subnav {
+  @apply relative z-20 border-b border-line bg-canvas;
+}
+
+.site-subnav:not(:has(*)) {
+  @apply hidden;
+}
+
+@media (width >= 48rem) {
+  :root {
+    --sticky-top: calc(var(--bar-height) + var(--subnav-height, 0px) - 1px);
+  }
+
+  .site-subnav {
+    @apply sticky bg-canvas/90 backdrop-blur-md;
+    /* Overlap the shared border so rounding cannot reveal scrolled content. */
+    top: calc(var(--bar-height) - 1px);
+  }
+
+  /* Bar and tabs read as one header with a single line under it. */
+  .site-header:has(+ .site-subnav > *) {
+    @apply border-b-transparent;
+  }
+}
+
+/* Focus moves to <main> after a navigation (for screen readers); no ring for that. */
+#main:focus {
+  outline: none;
+}
+
+/* ---------------------------------------------------------------- Virtual blocks */
+
+/* Long code and diff views are runs of `.vblock`s (src/views/blocks.rs): up to 128
+   fixed-height rows each. Off screen, a block skips style, layout and paint as a unit. Its
+   placeholder height is exact, so scrolling never shows blank lines or moves the
+   scrollbar: every row inside is exactly `--row-h` tall, and the block says how many rows
+   it holds in `data-rows`. Typed `attr()` reads that where supported; elsewhere blocks.js
+   sets the same height through the CSSOM (the CSP forbids `style=`). The first
+   declaration is the fallback for both: a full block, which `auto` replaces with the
+   real height once the block has been rendered.
+
+   An open changed file (`.diff-file[data-rows]`, see Diffs) is contained the same way as
+   a whole: its header, any bar and placeholder are whole rows too, and `data-rows` counts
+   them. Containment outside the file's horizontal scroller is cheaper per frame than
+   blocks inside it, so only long diffs also have blocks (`BLOCKED_ABOVE_ROWS`). Its
+   borders are outside the placeholder (`contain-intrinsic-*` sizes the content box).
+
+   The second declaration must not use `var()`: a declaration holding `var()` is only
+   checked when computed, so browsers without typed `attr()` would keep it and end up
+   with no placeholder height at all, instead of dropping it while parsing. */
+:root {
+  --row-h: 1.25rem;
+}
+
+.vblock {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 160rem;
+  contain-intrinsic-block-size: auto calc(attr(data-rows type(<number>), 128) * 1.25rem);
+}
+
+.diff-file[open][data-rows] {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 24rem;
+  contain-intrinsic-block-size: auto calc(attr(data-rows type(<number>), 24) * 1.25rem);
+}
+
+/* A view of blocks is at least as wide as its widest row (`column_class` in
+   src/views/blocks.rs), which the server knows before any block is rendered. Sizing the
+   view to its content instead (`width: max-content`) makes the browser measure every
+   rendered row again each time a block is laid out while scrolling, and leaves the
+   horizontal scrollbar to appear only once the widest block has been. Each view adds its
+   gutters to `--cols` columns. */
+.cols-8 { --cols: 8; }
+.cols-16 { --cols: 16; }
+.cols-24 { --cols: 24; }
+.cols-32 { --cols: 32; }
+.cols-40 { --cols: 40; }
+.cols-48 { --cols: 48; }
+.cols-56 { --cols: 56; }
+.cols-64 { --cols: 64; }
+.cols-72 { --cols: 72; }
+.cols-80 { --cols: 80; }
+.cols-88 { --cols: 88; }
+.cols-96 { --cols: 96; }
+.cols-104 { --cols: 104; }
+.cols-112 { --cols: 112; }
+.cols-120 { --cols: 120; }
+.cols-128 { --cols: 128; }
+.cols-136 { --cols: 136; }
+.cols-144 { --cols: 144; }
+.cols-152 { --cols: 152; }
+.cols-160 { --cols: 160; }
+.cols-168 { --cols: 168; }
+.cols-176 { --cols: 176; }
+.cols-184 { --cols: 184; }
+.cols-192 { --cols: 192; }
+.cols-200 { --cols: 200; }
+.cols-208 { --cols: 208; }
+.cols-216 { --cols: 216; }
+.cols-224 { --cols: 224; }
+.cols-232 { --cols: 232; }
+.cols-240 { --cols: 240; }
+.cols-248 { --cols: 248; }
+.cols-256 { --cols: 256; }
+
+/* ---------------------------------------------------------------- Diffs */
+
+html:has(.language-dialog[open]) { overflow: hidden; }
+.language-dialog {
+  @apply m-auto w-[calc(100%-2rem)] max-w-[90rem] overflow-hidden rounded-(--radius-ui) border border-line bg-surface p-0 text-ink;
+  height: min(85dvh, 60rem);
+}
+.language-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.language-dialog > .box { border: 0; height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.language-dialog .box-header, .language-dialog [data-listing-search] { flex-shrink: 0; }
+.language-browser { display: grid; grid-template-columns: minmax(13rem, 28%) minmax(0, 1fr); min-height: 0; flex: 1; }
+.language-file-list { --diff-tree-indent: 18px; min-width: 0; overflow: auto; overscroll-behavior: contain; border-inline-end: 1px solid var(--line); }
+.language-preview { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.language-preview > .box { border: 0; border-radius: 0; }
+.language-preview-path { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+/* Keep the path, commit and file controls above the scrolling preview body. */
+.language-dialog .language-preview {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+.language-dialog [data-file-preview] {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+.language-dialog [data-file-preview-body] {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+@media (max-width: 640px) {
+  .language-dialog { width: calc(100% - 1rem); height: 92dvh; }
+  .language-browser { grid-template-columns: minmax(7rem, 35%) minmax(0, 1fr); }
+  .language-file-list { --diff-tree-indent: 12px; }
+}
+/* The outer list owns scrolling. The shared diff tree otherwise traps wheel events
+   in its own overscroll container, even when that inner list has no overflow. */
+.language-file-list > .diff-tree {
+  overflow: visible;
+  overscroll-behavior: auto;
+}
+
+/* Commit, compare and pull request file diffs. `--diff-top` is where file headers and
+   the file tree stick: just below the sticky top bar, and its tabs where those stick too. */
+.diff-layout {
+  --diff-top: var(--sticky-top);
+  --diff-tree-indent: 14px;
+}
+
+.diff-toolbar {
+  @apply mb-3 flex flex-wrap min-h-8 items-center gap-3;
+}
+
+.diff-columns {
+  @apply grid grid-cols-1 items-start gap-4;
+}
+
+/* The file tree: above the diffs on small screens once opened, a sticky column beside
+   them on large ones unless hidden (`data-sidebar` on the layout, set by diff.js). */
+.diff-sidebar {
+  @apply max-h-80 min-h-0 overflow-hidden;
+}
+
+.diff-sidebar-summary {
+  @apply flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] font-medium;
+}
+.diff-sidebar[open] {
+  @apply block;
+}
+.diff-sidebar .diff-tree { max-height: 14rem; }
+.diff-sidebar:not([open]) > :not(summary) { display: none; }
+
+@media (width >= 64rem) {
+  .diff-columns.has-tree {
+    grid-template-columns: 16.5rem minmax(0, 1fr);
+  }
+
+  .diff-layout[data-sidebar="hidden"] .diff-columns.has-tree {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diff-sidebar {
+    @apply sticky;
+    top: calc(var(--diff-top) + 0.75rem);
+    max-height: calc(100dvh - var(--diff-top) - 1.5rem);
+  }
+
+  .diff-sidebar-summary { display: none; }
+  .diff-sidebar .diff-tree { max-height: calc(100dvh - var(--diff-top) - 5rem); }
+
+  .diff-layout[data-sidebar="hidden"] .diff-sidebar {
+    @apply hidden;
+  }
+}
+
+.diff-filter {
+  @apply shrink-0 border-b border-line p-2;
+}
+
+.diff-filter-input {
+  @apply block h-8 w-full rounded-(--radius-ui) border border-line bg-surface ps-8 pe-12 text-[13px] text-ink
+    transition-colors placeholder:text-ink-faint hover:border-line-strong focus:border-ink focus:outline-none;
+}
+
+.diff-filter-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.diff-filter-count {
+  @apply pointer-events-none absolute inset-e-2.5 top-1/2 -translate-y-1/2 font-mono text-[11px] text-ink-faint tabular-nums;
+}
+
+.diff-tree {
+  @apply min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5;
+}
+
+.diff-tree-row[data-depth="1"] { --depth: 1; }
+.diff-tree-row[data-depth="2"] { --depth: 2; }
+.diff-tree-row[data-depth="3"] { --depth: 3; }
+.diff-tree-row[data-depth="4"] { --depth: 4; }
+.diff-tree-row[data-depth="5"] { --depth: 5; }
+.diff-tree-row[data-depth="6"] { --depth: 6; }
+.diff-tree-row[data-depth="7"] { --depth: 7; }
+.diff-tree-row[data-depth="8"] { --depth: 8; }
+.diff-tree-row[data-depth="9"] { --depth: 9; }
+.diff-tree-row:not([data-depth="0"], [data-depth="1"], [data-depth="2"], [data-depth="3"], [data-depth="4"],
+  [data-depth="5"], [data-depth="6"], [data-depth="7"], [data-depth="8"], [data-depth="9"]) { --depth: 10; }
+
+/* One row per folder or file. Indent guides run down from each ancestor folder's chevron.
+   Colours fade only into a hover: diff.js moves the current-file marker (below) while the
+   page scrolls, and a transition there would restyle and repaint the whole sticky tree
+   on every frame of the fade, twice per file passed (about half the main thread's paint
+   time scrolling a 152-file pull request, see docs/performance-followups.md). File rows
+   are links, so `transition-none` also overrides the base layer's fade on every `a`. */
+.diff-tree-item {
+  @apply flex h-7 w-full items-center gap-1.5 rounded pe-1.5 text-start text-[13px] text-ink-muted transition-none
+    hover:bg-hover hover:text-ink hover:transition-colors;
+  padding-inline-start: calc(0.375rem + var(--depth, 0) * var(--diff-tree-indent));
+  background-image: repeating-linear-gradient(
+    to var(--inline-end),
+    transparent 0 5.5px,
+    var(--line) 5.5px 6.5px,
+    transparent 6.5px var(--diff-tree-indent)
+  );
+  background-position: var(--inline-start) 0.375rem top 0;
+  background-size: calc(var(--depth, 0) * var(--diff-tree-indent)) 100%;
+  background-repeat: no-repeat;
+}
+
+/* The file whose header is stuck at the top of the diffs. */
+.diff-tree-item[aria-current="true"] {
+  @apply bg-hover font-medium text-ink;
+}
+
+.diff-tree-chevron {
+  @apply rotate-inline-90 transition-transform duration-150;
+}
+
+.diff-tree-closed,
+.diff-tree-item[aria-expanded="false"] .diff-tree-open {
+  @apply hidden;
+}
+
+.diff-tree-item[aria-expanded="false"] .diff-tree-closed {
+  @apply block;
+}
+
+.diff-tree-item[aria-expanded="false"] .diff-tree-chevron {
+  @apply rotate-0;
+}
+
+/* A file's change type: a small square in its status colour with a glyph inside. */
+.status-mark {
+  @apply grid size-3.5 shrink-0 place-items-center rounded-[3px] border font-mono text-[10px] leading-none font-bold;
+  border-color: var(--status-border, color-mix(in oklab, currentColor 55%, transparent));
+  background: color-mix(in oklab, currentColor 10%, transparent);
+}
+
+.status-mark::before { content: "•"; }
+.status-added { color: var(--success); }
+.status-added::before { content: "+"; }
+.status-deleted { color: var(--danger); border-style: var(--deleted-border-style, solid); }
+.status-deleted::before { content: "−"; }
+.status-modified { color: var(--warning); }
+.status-renamed,
+.status-copied { color: var(--ink-muted); }
+.status-renamed::before { content: "→"; }
+.status-copied::before { content: "⧉"; font-weight: 400; }
+
+/* Each changed file. `clip` rather than
+   `hidden` keeps the rounded corners without making the box a scroll container, which
+   would stop the header from sticking. An open file off screen is skipped as a whole
+   (see Virtual blocks), so everything in it is a whole number of rows tall: the header
+   (`FILE_HEADER_ROWS`), the pull request's "View file" bar (`FILE_BAR_ROWS`), the
+   placeholder of a file without a diff (`PLACEHOLDER_ROWS`) and every diff row. The one
+   exception, the diff's horizontal scrollbar where the platform's scrollbars take space,
+   is added by blocks.js. */
+.diff-file {
+  overflow: clip;
+  scroll-margin-top: var(--diff-top, 7rem);
+}
+
+.diff-file > summary {
+  height: calc(2 * var(--row-h));
+  min-height: 0;
+}
+
+.diff-file-bar {
+  @apply flex items-center justify-end border-b border-line px-3;
+  height: calc(2 * var(--row-h));
+}
+
+.diff-file-header {
+  @apply sticky z-10 flex min-h-10 cursor-pointer select-none items-center gap-2.5 bg-subtle ps-3 pe-1.5
+    transition-colors hover:bg-hover;
+  top: var(--diff-top);
+}
+
+.diff-file[open] > .diff-file-header {
+  @apply border-b border-line;
+}
+
+.diff-file-action {
+  @apply inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded text-xs text-ink-muted transition-colors
+    hover:bg-canvas hover:text-ink;
+}
+
+.diff-file-action .copy-done,
+.diff-file-action[data-copied] .copy-idle {
+  @apply hidden;
+}
+
+.diff-file-action[data-copied] .copy-done {
+  @apply block;
+}
+
+/* Visible labels replace the color-only five-block change bar. */
+.change-counts {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.change-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 3px 6px;
+  line-height: 1.25;
+  font-weight: 500;
+}
+.change-count b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.change-count-added { color: var(--success); background: var(--diff-add-fill, transparent); }
+.change-count-deleted {
+  color: var(--danger);
+  background: var(--diff-del-fill, transparent);
+  border-style: var(--deleted-border-style, solid);
+}
+.diff-file-counts { display: none; }
+@media (min-width: 640px) { .diff-file-counts { display: inline-flex; } }
+
+.diff-placeholder {
+  @apply truncate px-4 text-center text-[13px] text-ink-muted;
+  height: calc(3 * var(--row-h));
+  line-height: calc(3 * var(--row-h));
+}
+
+/* A unified diff (repo/diff_rows.html): one horizontal scroller per file holding
+   `.diff-view`, as wide as its longest rendered row so row backgrounds span the whole
+   scroll width. Its rows sit in `.vblock`s and each is exactly `--row-h` tall: a line
+   is two number cells then the text, its sign drawn from the row's kind; hunk headers and
+   end-of-file notes are text indented past the numbers. Numbers and signs are never
+   copied (`user-select`, generated content). `diff-w1` … `diff-w7` size the number
+   columns for the file's largest line number. `.diff-excerpt` is the numberless
+   excerpt above a review comment in the conversation. */
+.diff-scroll {
+  overflow-x: auto;
+  /* Lets comment threads between blocks be exactly as wide as the visible diff. */
+  container-type: inline-size;
+}
+
+.diff-view {
+  --num-w: 1ch;
+  --nums-w: calc(2 * var(--num-w) + 2.25rem);
+  @apply font-mono text-[12.5px];
+  min-width: max(100%, calc(var(--nums-w) + 2.75rem + var(--cols, 0) * 1ch));
+  line-height: var(--row-h);
+  tab-size: 4;
+}
+
+.diff-w2 { --num-w: 2ch; }
+.diff-w3 { --num-w: 3ch; }
+.diff-w4 { --num-w: 4ch; }
+.diff-w5 { --num-w: 5ch; }
+.diff-w6 { --num-w: 6ch; }
+.diff-w7 { --num-w: 7ch; }
+
+
+.diff-excerpt {
+  --nums-w: 0rem;
+}
+
+.diff-view :is(.diff-add, .diff-del, .diff-ctx, .diff-hunk, .diff-eof) {
+  display: flex;
+  height: var(--row-h);
+  padding-inline-end: 1.5rem;
+  white-space: pre;
+  /* No `overflow-y: clip`: a clip per row costs every frame (a clip node per row to walk
+     before paint and to layerize; about 13 % of the main thread's time scrolling a
+     100-file commit, see docs/design/frontend-virtualization.md). A row is still exactly
+     one row tall (`height`) and the server shows line-breaking characters as symbols
+     (`row_char` in src/render/mod.rs), so only an unusually tall glyph can draw past its
+     row. */
+}
+
+/* The sign, after the numbers (`order`), before the text. */
+.diff-view :is(.diff-add, .diff-del, .diff-ctx)::before {
+  @apply w-5 shrink-0 ps-1.5 text-ink-faint;
+  content: " ";
+}
+
+.diff-view .num {
+  @apply shrink-0 select-none px-2 text-end text-ink-faint;
+  order: -1;
+  box-sizing: content-box;
+  width: var(--num-w);
+}
+
+.diff-view .num + .num {
+  @apply pe-3;
+}
+
+/* Lines of a pull request file the viewer may comment on (`data-comment`, diff.js):
+   either number opens the comment form; one number per file is a tab stop that the
+   arrow keys move. Without scripts, each hunk header links to the form instead. */
+[data-comment] .diff-view .num {
+  cursor: pointer;
+}
+
+[data-comment] .diff-view .num:hover {
+  @apply text-ink;
+}
+
+/* Inside the row, so neighbouring rows never cover it. */
+.diff-view .num:focus-visible {
+  outline-offset: -2px;
+}
+
+.diff-hunk-comment {
+  @apply ms-6 text-ink-muted underline underline-offset-4;
+}
+
+[data-ready] .diff-hunk-comment {
+  display: none;
+}
+
+.diff-view .diff-add {
+  background: var(--diff-add-fill, color-mix(in oklab, var(--success) 11%, transparent));
+  box-shadow: var(--diff-add-rail, none);
+}
+
+.diff-view .diff-add::before {
+  content: "+";
+}
+
+.diff-view .diff-add::before,
+.diff-view .diff-add > .num {
+  color: var(--success);
+}
+
+.diff-view .diff-del {
+  background: var(--diff-del-fill, color-mix(in oklab, var(--danger) 11%, transparent));
+  background-image: var(--diff-del-rail, none);
+  background-size: 3px 100%;
+  background-repeat: no-repeat;
+}
+
+.diff-view .diff-del::before {
+  content: "-";
+}
+
+.diff-view .diff-del::before,
+.diff-view .diff-del > .num {
+  color: var(--danger);
+}
+
+.diff-view .diff-hunk {
+  @apply bg-subtle text-ink-faint;
+  padding-inline-start: calc(var(--nums-w) + 0.375rem);
+}
+
+.diff-view .diff-eof {
+  @apply text-[11px] text-ink-faint italic;
+  padding-inline-start: calc(var(--nums-w) + 1.25rem);
+}
+
+/* A linked line (#diff-…-R12) lands below the sticky top bar and tabs. */
+.diff-view [id] {
+  scroll-margin-top: 7rem;
+}
+
+/* Review comments and the inline form between blocks (pulls/files.html): pinned to the
+   left edge and as wide as the visible diff, so they stay in view whatever the code's
+   horizontal scroll. */
+.diff-comment {
+  @apply sticky inset-s-0 border-y border-line bg-subtle p-3 font-sans text-[13px] whitespace-normal text-ink;
+  width: 100cqi;
+}
+
+/* ---------------------------------------------------------------- File viewer lines */
+
+/* repo/blob.html and repo/blame.html. Lines come in virtual blocks (`.vblock`, see
+   Virtual blocks): a block off screen skips layout and paint as a unit, so a file of
+   thousands of lines appears as fast as a short one, on a full load and on an htmx swap
+   alike. Every line is exactly one `--row-h` tall (`height`, not `min-height`: a glyph
+   from a taller fallback font, an emoji say, must not grow it), which keeps each block's
+   placeholder exact. `.code-lines` is at least as wide as its widest line (`cols-N`,
+   see Virtual blocks), so line backgrounds span the horizontal scroll. */
+.code-lines {
+  @apply py-3 font-mono text-[12.5px] leading-5;
+  /* The line number (w-14), the code's padding (pl-3, pr-6) and the widest line. */
+  min-width: max(100%, calc(5.75rem + var(--cols, 0) * 1ch));
+  tab-size: 4;
+}
+
+.code-line {
+  display: flex;
+  height: var(--row-h);
+  line-height: var(--row-h);
+  /* Never paints over the next line (see the diff rows above). */
+  overflow-y: clip;
+  /* A linked line (#L12) lands below the sticky top bar and tabs, not under them. */
+  scroll-margin-top: calc(var(--sticky-top, 6.25rem) + 1.5rem);
+}
+
+.code-line:target {
+  @apply bg-hover;
+}
+
+/* Drawn from `data-line`, so it is never copied with the code; nav.js handles clicks. */
+.code-line .line-number {
+  @apply w-11 shrink-0 sm:w-14 cursor-pointer select-none pe-3 text-end text-ink-faint;
+}
+
+.code-line .line-number::before {
+  content: attr(data-line);
+}
+
+.code-line .line-number:hover {
+  @apply text-ink;
+}
+
+.code-line .line-code {
+  @apply whitespace-pre ps-2 pe-6 sm:ps-3;
+}
+
+/* Blame (repo/blame.html): hunks one after another in the file's blocks. A hunk header is
+   exactly two rows (`HEADER_ROWS` in src/views/blame.rs), its hairline included, so
+   blocks keep their exact height. The scroller is a size container so the header's
+   text can be as wide as the visible area and stay there (sticky) while long lines
+   scroll sideways; its band spans the whole scroll width like the lines. */
+.blame-scroll {
+  container-type: inline-size;
+}
+
+.code-lines.blame-lines {
+  @apply pt-0;
+}
+
+.blame-hunk {
+  @apply border-t border-line bg-subtle font-sans text-xs;
+  height: calc(2 * var(--row-h));
+}
+
+/* The first header sits right under the toolbar's own hairline. */
+.blame-lines > .vblock:first-child > .blame-hunk:first-child {
+  border-top-color: transparent;
+}
+
+.blame-hunk-info {
+  @apply sticky inset-s-0 flex h-full min-w-0 items-center gap-2 px-4 leading-4;
+  width: 100cqw;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A still bar across the whole width instead of a sweeping one. */
+  .nav-busy #page-progress,
+  #page-progress.htmx-request {
+    width: 100%;
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    /* Even a 0.01ms `display`/`overlay` transition keeps a closed dialog rendered until a
+       later frame; without motion, closing hides it at once. */
+    transition-behavior: normal !important;
+  }
+}
+
+/* ---------------------------------------------------------------- Actions log console */
+
+/* templates/actions/step_body.html, rows from src/views/actions/log_lines.rs. A row is a
+   number link (drawn from `data-line`, so copying the log copies no numbers), the time
+   when the toolbar shows times, and the text, which wraps (any long word too) beside the
+   number column. Groups are native details. Annotation rows and ANSI colours use the
+   status and syntax tokens only, so every theme recolours them; logs never carry a
+   literal colour. Rows off screen skip layout and paint; their height is remembered. */
+.log-console {
+  @apply py-2 font-mono text-xs leading-5;
+  tab-size: 4;
+}
+
+.log-line {
+  display: flex;
+  align-items: flex-start;
+  min-height: 1.25rem;
+  padding-inline-end: 1rem;
+  scroll-margin-top: calc(var(--sticky-top, 6.25rem) + 3rem);
+}
+
+div.log-line {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 1.25rem;
+}
+
+.log-line:hover {
+  @apply bg-subtle;
+}
+
+.log-line:target,
+.log-line[data-target] {
+  @apply bg-hover;
+  box-shadow: inset 2px 0 0 var(--ink-muted);
+}
+
+.log-num {
+  @apply w-12 shrink-0 cursor-pointer select-none pe-3 text-end text-ink-faint tabular-nums sm:w-14;
+}
+
+.log-num::before {
+  content: attr(data-line);
+}
+
+.log-num:hover {
+  @apply text-ink;
+}
+
+.log-time {
+  @apply hidden shrink-0 select-none pe-3 text-ink-faint tabular-nums;
+}
+
+[data-times] .log-time {
+  display: inline;
+}
+
+.log-text {
+  @apply min-w-0 flex-1 whitespace-pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-icon,
+.log-chevron {
+  display: inline-block;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-inline-end: 0.375rem;
+  vertical-align: -0.125rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.log-label {
+  font-weight: 600;
+}
+
+.log-line[data-kind="error"] {
+  background: var(--danger-subtle);
+}
+
+.log-line[data-kind="error"] .log-text {
+  color: var(--danger);
+}
+
+.log-line[data-kind="warning"] {
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.log-line[data-kind="warning"] .log-text {
+  color: var(--warning);
+}
+
+.log-line[data-kind="notice"] .log-icon,
+.log-line[data-kind="debug"] .log-text,
+.log-line[data-kind="command"] .log-text {
+  color: var(--ink-muted);
+}
+
+.log-group > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.log-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.log-group-head .log-text {
+  font-weight: 600;
+}
+
+.log-chevron {
+  color: var(--ink-faint);
+  transition: rotate 120ms;
+}
+
+.log-group[open] > summary .log-chevron {
+  rotate: 90deg;
+}
+
+mark.log-match {
+  @apply rounded-sm bg-hover text-ink;
+  outline: 1px solid var(--line-strong);
+}
+
+mark.log-match[data-current] {
+  @apply bg-inverted text-inverted-ink;
+}
+
+/* ANSI colours: the eight hues and their bright forms share a token. */
+.ansi-f0 { color: var(--ink); }
+.ansi-f1, .ansi-f9 { color: var(--danger); }
+.ansi-f2, .ansi-f10 { color: var(--success); }
+.ansi-f3, .ansi-f11 { color: var(--warning); }
+.ansi-f4, .ansi-f12 { color: var(--syntax-number); }
+.ansi-f5, .ansi-f13 { color: var(--syntax-keyword); }
+.ansi-f6, .ansi-f14 { color: var(--syntax-attribute); }
+.ansi-f7 { color: var(--ink-muted); }
+.ansi-f8 { color: var(--ink-faint); }
+.ansi-f15 { color: var(--ink); }
+.ansi-b0, .ansi-b8 { background: color-mix(in srgb, var(--ink) 18%, transparent); }
+.ansi-b1, .ansi-b9 { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.ansi-b2, .ansi-b10 { background: color-mix(in srgb, var(--success) 22%, transparent); }
+.ansi-b3, .ansi-b11 { background: color-mix(in srgb, var(--warning) 22%, transparent); }
+.ansi-b4, .ansi-b12 { background: color-mix(in srgb, var(--syntax-number) 22%, transparent); }
+.ansi-b5, .ansi-b13 { background: color-mix(in srgb, var(--syntax-keyword) 22%, transparent); }
+.ansi-b6, .ansi-b14 { background: color-mix(in srgb, var(--syntax-attribute) 22%, transparent); }
+.ansi-b7, .ansi-b15 { background: var(--hover); }
+.ansi-inverse { background: var(--ink); color: var(--canvas); }
+.ansi-bold { font-weight: 600; }
+.ansi-dim { opacity: 0.7; }
+.ansi-italic { font-style: italic; }
+.ansi-underline { text-decoration: underline; }
+
+/* ---------------------------------------------------------------- Themes */
+
+/* Theme previews cross-fade instead of cutting, so sweeping the pointer, scrolling or
+   arrowing through themes never flashes between them (theme-picker.js sets
+   `data-theme-fade` on <html> while a gallery preview changes; the picker's preview pane
+   always fades). A colour fade isn't motion, and it's what photosensitive visitors need
+   most, so it outranks the reduced-motion rule above. A preview changed mid-fade retargets
+   from the colours on screen. */
+:root[data-theme-fade],
+:root[data-theme-fade] *,
+:root[data-theme-fade] *::before,
+:root[data-theme-fade] *::after,
+.tpk-preview,
+.tpk-preview *,
+.tpk-preview *::before,
+.tpk-preview *::after {
+  transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, box-shadow !important;
+  transition-duration: 300ms !important;
+  transition-timing-function: ease-out !important;
+  transition-delay: 0s !important;
+}
+
+/* Header theme picker (templates/themes/picker.html): a large dialog with the family index,
+   the list, and a preview pane showing the highlighted theme on a miniature repository page.
+   The dialog itself follows the page's theme, which changes only when a theme is applied.
+   Full screen on phones, where the preview pane gives way to the list. */
+.tpk {
+  @apply fixed inset-0 m-0 flex h-dvh max-h-none w-full max-w-none flex-col overflow-hidden bg-surface text-ink;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  transition: opacity 120ms ease-out, translate 120ms ease-out, display 120ms allow-discrete, overlay 120ms allow-discrete;
+}
+
+.tpk:not([open]) { display: none; opacity: 0; translate: 0 6px; }
+
+@starting-style {
+  .tpk[open] { opacity: 0; translate: 0 6px; }
+}
+
+.tpk::backdrop {
+  background: rgb(0 0 0 / 0.4);
+  backdrop-filter: blur(2px);
+}
+
+@media (width >= 40rem) {
+  .tpk {
+    @apply m-auto h-[min(48rem,calc(100dvh-4rem))] w-[min(76rem,calc(100vw-3rem))] rounded-lg border border-line-strong p-0;
+    box-shadow: 0 24px 64px -12px rgb(0 0 0 / 0.35), 0 0 0 1px rgb(0 0 0 / 0.04);
+  }
+}
+
+html:has(.tpk[open]) { overflow: hidden; }
+
+.tpk-head { @apply shrink-0 border-b border-line; }
+
+.tpk-search {
+  @apply flex h-13 items-center gap-3 px-4;
+}
+
+.tpk-search input {
+  @apply h-full min-w-0 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-faint;
+}
+
+.tpk-search input::-webkit-search-cancel-button { display: none; }
+
+.tpk-bar { @apply flex flex-wrap items-center gap-3 px-4 pb-3; }
+
+.tpk-segment { @apply h-8 sm:h-8; }
+
+.tpk-segment button {
+  @apply inline-flex h-full cursor-pointer items-center rounded px-3 text-[13px] text-ink-muted transition-colors
+    duration-100 hover:text-ink;
+}
+
+.tpk-segment button[aria-pressed="true"] { @apply bg-hover font-medium text-ink; }
+
+.tpk-body { @apply flex min-h-0 flex-1; }
+
+/* Family index: jumps to a group and follows the list as it scrolls. */
+.tpk-index {
+  @apply hidden w-48 shrink-0 overflow-y-auto overscroll-contain border-e border-line p-2 lg:block;
+}
+
+.tpk-index a {
+  @apply flex h-7 items-center gap-2 rounded px-2 text-[13px] text-ink-muted hover:bg-hover hover:text-ink;
+}
+
+.tpk-index a span { @apply ms-auto text-[11px] tabular-nums text-ink-faint; }
+
+.tpk-index a[aria-current] { @apply bg-hover font-medium text-ink; }
+
+.tpk-list {
+  @apply min-w-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2;
+  scroll-padding-block: 2.5rem 0.5rem;
+}
+
+.tpk-group-title {
+  @apply sticky top-0 z-10 -mx-2 flex items-baseline gap-2 bg-surface/95 px-4 pb-1.5 pt-3 text-[11px] font-semibold
+    uppercase tracking-wider text-ink-faint backdrop-blur-sm;
+}
+
+.tpk-group-title span { @apply font-normal tabular-nums; }
+
+.tpk-letter {
+  @apply mx-2 mb-1 mt-3 border-b border-line pb-1 font-mono text-[11px] text-ink-faint;
+}
+
+.tpk-opt {
+  @apply flex h-11 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-start text-[13px] text-ink sm:h-10;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.5rem;
+}
+
+.tpk-opt[aria-selected="true"] { @apply bg-hover; }
+
+.tpk-opt:focus-visible { @apply outline-offset-0; }
+
+/* A thumbnail of the theme: its page, its text, and four accents. */
+.tpk-chip {
+  @apply flex h-7 w-14 shrink-0 items-center gap-0.75 rounded border border-line bg-canvas px-1.5 text-ink;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 6%, transparent);
+}
+
+.tpk-chip b { @apply me-auto text-[11px] font-semibold leading-none; }
+.tpk-chip i { @apply size-1.5 rounded-full; }
+.tpk-chip i:nth-of-type(1) { background: var(--syntax-keyword); }
+.tpk-chip i:nth-of-type(2) { background: var(--syntax-string); }
+.tpk-chip i:nth-of-type(3) { background: var(--syntax-function); }
+.tpk-chip i:nth-of-type(4) { background: var(--warning); }
+
+.tpk-name { @apply min-w-0 flex-1 truncate; }
+
+.tpk-variant { @apply shrink-0 text-[11px] text-ink-faint; }
+
+.tpk-check { @apply shrink-0 text-ink; }
+.tpk-opt[aria-pressed="false"] .tpk-check { visibility: hidden; }
+.tpk-opt[aria-pressed="true"] .tpk-name { @apply font-medium; }
+
+/* Preview pane: the theme's name and Apply on the page's surface, then the miniature page in
+   the highlighted theme's own colours. */
+.tpk-side {
+  @apply hidden w-[28rem] shrink-0 flex-col gap-3 overflow-y-auto border-s border-line bg-subtle p-4 md:flex xl:w-[32rem];
+}
+
+.tpk-info { @apply flex items-center gap-3; }
+.tpk-info-name { @apply truncate text-[15px] font-semibold tracking-tight; }
+.tpk-info-meta { @apply mt-0.5 truncate text-xs text-ink-muted; }
+.tpk-author { @apply mt-auto truncate text-[11px] text-ink-faint; }
+
+.tpk-preview {
+  @apply overflow-hidden rounded-md border border-line bg-canvas text-[11px] leading-4 text-ink;
+  box-shadow: 0 8px 24px -12px rgb(0 0 0 / 0.3);
+}
+
+.pv-top { @apply flex h-9 items-center gap-2 border-b border-line bg-surface px-3; }
+.pv-crumb { @apply me-auto truncate text-ink-muted; }
+.pv-crumb b { @apply font-semibold text-ink; }
+
+.pv-btn {
+  @apply inline-flex h-5.5 items-center gap-1 rounded border border-line bg-surface px-1.5 text-[10px] font-medium text-ink;
+}
+
+.pv-primary { @apply border-inverted bg-inverted text-inverted-ink; }
+
+.pv-tabs { @apply flex gap-3.5 border-b border-line bg-surface px-3 text-ink-muted; }
+.pv-tabs span { @apply inline-flex h-7.5 items-center gap-1; }
+.pv-tabs i { @apply rounded-full bg-hover px-1.5 text-[9px] not-italic leading-3.5 text-ink-muted; }
+.pv-tabs .pv-tab-on { @apply relative font-medium text-ink after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-ink; }
+
+.pv-main { @apply flex flex-col gap-2.5 p-3; }
+.pv-box { @apply overflow-hidden rounded border border-line bg-surface; }
+.pv-box-head { @apply flex h-6.5 items-center justify-between border-b border-line bg-subtle px-2.5 text-[10px] font-medium; }
+.pv-faint { @apply font-normal text-ink-faint; }
+
+.pv-code { @apply overflow-hidden whitespace-pre px-2.5 py-1.5 font-mono text-[10.5px] leading-[1.15rem]; }
+.pv-ln { @apply inline-block w-5 select-none text-ink-faint; }
+.pv-k { color: var(--syntax-keyword); font-weight: var(--syntax-keyword-weight, inherit); }
+.pv-s { color: var(--syntax-string); }
+.pv-n { color: var(--syntax-number); }
+.pv-f { color: var(--syntax-function); }
+.pv-t { color: var(--syntax-type); }
+.pv-c { color: var(--syntax-comment); font-style: italic; }
+
+.pv-diff { @apply px-0 py-0; }
+.pv-diff > span { @apply block px-2.5; }
+.pv-add { @apply font-semibold text-success; }
+.pv-del { @apply font-semibold text-danger; }
+.pv-add-line { background: var(--diff-add-fill, color-mix(in oklab, var(--success) 14%, transparent)); box-shadow: var(--diff-add-rail, none); }
+.pv-del-line {
+  background: var(--diff-del-fill, color-mix(in oklab, var(--danger) 14%, transparent));
+  background-image: var(--diff-del-rail, none);
+  background-size: 3px 100%;
+  background-repeat: no-repeat;
+}
+
+.pv-row { @apply flex flex-wrap gap-1.5; }
+.pv-pill { @apply inline-flex h-5.5 items-center gap-1 rounded-full border px-2 text-[10px] font-medium; }
+.pv-ok { @apply border-success/40 text-success; background: var(--diff-add-fill, transparent); border-color: var(--status-border, color-mix(in oklab, var(--success) 40%, transparent)); }
+.pv-warn { @apply border-warning/40 text-warning; }
+.pv-bad {
+  @apply border-danger/40 text-danger;
+  background: var(--diff-del-fill, transparent);
+  border-color: var(--status-border, color-mix(in oklab, var(--danger) 40%, transparent));
+  border-style: var(--deleted-border-style, solid);
+}
+
+.pv-text { @apply text-ink-muted; }
+.pv-link { @apply text-ink underline decoration-line-strong underline-offset-2; }
+
+.tpk-foot {
+  @apply flex h-10 shrink-0 items-center gap-3 border-t border-line bg-subtle px-4 text-xs text-ink-muted;
+}
+
+.tpk-foot .kbd { @apply inline-flex h-4.5 min-w-4.5 items-center justify-center px-1 text-[10px]; }
+
+/* Gallery variant filter: a small segmented control. */
+.theme-segment {
+  @apply inline-flex h-10 shrink-0 items-center gap-0.5 rounded-(--radius-ui) border border-line bg-surface p-0.5 sm:h-9;
+}
+
+.theme-segment a {
+  @apply inline-flex h-full items-center rounded px-3 text-[13px] text-ink-muted transition-colors duration-100 hover:text-ink;
+}
+
+.theme-segment a[aria-current] {
+  @apply bg-hover font-medium text-ink;
+}
+
+.theme-family + .theme-family { @apply mt-8; }
+
+.theme-family-title {
+  @apply mb-3 flex items-baseline gap-2 text-[13px] font-semibold tracking-tight text-ink;
+}
+
+.theme-family-title span { @apply text-[11px] font-normal text-ink-faint; }
+
+.theme-grid {
+  @apply grid gap-3;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+}
+
+@media (width >= 40rem) {
+  .theme-grid { grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); }
+}
+
+/* The frame belongs to the page's theme, everything inside to the card's own. Off-screen
+   cards skip layout and paint entirely, so hundreds of previews cost little. */
+.theme-item {
+  @apply rounded-(--radius-ui) border border-line transition-colors duration-100 hover:border-line-strong;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 8.25rem;
+}
+
+.theme-item:has([aria-pressed="true"]) {
+  @apply border-ink;
+  box-shadow: 0 0 0 1px var(--ink);
+}
+
+.theme-item:has(:focus-visible) {
+  @apply outline-2 outline-offset-2 outline-ink;
+}
+
+.theme-card {
+  @apply block w-full cursor-pointer overflow-hidden rounded-[5px] bg-canvas text-start text-ink;
+}
+
+.theme-card:focus-visible { outline: none; }
+
+/* The live preview: a page, a bordered container with a header row, two lines of code, and
+   the scheme's accents. Text comes from `content` so each card stays a handful of nodes. */
+.tp { @apply block px-2.5 pt-2.5; }
+.tp i { font-style: normal; }
+
+/* The preview is a thumbnail: its text is set at 12px and the box drawn at 5/6 scale, so it
+   renders at 10px. Lengths inside are 6/5 of the drawn size to come out exact after zoom. */
+.tp-box {
+  @apply block overflow-hidden rounded-[4.8px] border-[1.2px] border-line bg-surface font-mono text-[12px] leading-[19.2px];
+  zoom: calc(5 / 6);
+}
+
+.tp-h {
+  @apply flex h-6 items-center justify-between border-b-[1.2px] border-line bg-subtle px-[7.2px] font-sans text-ink-muted;
+}
+
+.tp-h::before { content: "main.rs"; }
+
+.tp-h::after {
+  @apply rounded-[2.4px] bg-inverted px-[4.8px] text-[10.8px] font-medium leading-[16.8px] text-inverted-ink;
+  content: "Star";
+}
+
+.tp-a, .tp-b { @apply block overflow-hidden whitespace-pre px-[7.2px]; }
+.tp-a { @apply pt-[4.8px]; }
+.tp-b { @apply pb-[4.8px]; }
+.tp-a::before { content: "fn "; color: var(--syntax-keyword); }
+.tp-a::after { content: "main()"; color: var(--syntax-function); }
+.tp-b::before { content: '  "hello"'; color: var(--syntax-string); }
+.tp-b::after { content: " // 42"; color: var(--syntax-comment); }
+
+.tp-sw {
+  @apply my-2.5 block h-1 rounded-full;
+  background: linear-gradient(90deg, var(--danger) 0 16.66%, var(--warning) 0 33.33%, var(--success) 0 50%,
+    var(--syntax-attribute) 0 66.66%, var(--syntax-function) 0 83.33%, var(--syntax-keyword) 0);
+}
+
+.theme-name {
+  @apply block truncate border-t border-line bg-surface px-2.5 py-2 text-xs font-medium;
+}
+
+.theme-card[aria-pressed="true"] .theme-name::before { content: "✓ "; }
+
+.branch-graph { border-collapse: collapse; }
+.branch-graph td { height: 48px; border-bottom: 1px solid var(--line); }
+.branch-graph tr:last-child td { border-bottom: 0; }
+.branch-graph-lanes { width: 1%; padding-block: 0; padding-inline: 12px 0; }
+
+/* Leading pull request filters open toward the inline end to stay inside the viewport. */
+@media (width >= 40rem) {
+  [aria-label="Pull request filters"] > details:nth-child(-n+2) > .menu {
+    inset-inline-start: 0;
+    inset-inline-end: auto;
+  }
+}
+
+/* Diagram styles are contained in a sandbox; only the frame belongs to the page. */
+.mermaid-frame { width: 100%; border: 1px solid var(--line); border-radius: .375rem; margin-block: 1rem; }

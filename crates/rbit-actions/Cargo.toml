@@ -1,0 +1,36 @@
+[package]
+name = "rbit-actions"
+description = "Static Actions job-claim, task-lease, run-trust, secret, environment and log application authority."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rbit-access.workspace = true
+# The server masking pass over task logs.
+aho-corasick.workspace = true
+# Secret sealing and the key file.
+aes-gcm.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+# The runner contract: cache and artifact rules, scopes and archive layout.
+rbit-workflow.workspace = true
+# Job conditions read JSON contexts.
+serde_json.workspace = true
+# Short-lived ES256 workflow identities.
+p256.workspace = true
+# Artifact downloads: the stored tar.gz read, rewritten as zip or tar.gz.
+flate2.workspace = true
+tar.workspace = true
+
+[dev-dependencies]
+# Log file tests run against a temporary directory.
+tempfile.workspace = true
+# Reads the zips the downloads write.
+zip.workspace = true
+
+[lints]
+workspace = true

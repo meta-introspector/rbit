@@ -1,0 +1,12 @@
+{% import "macros.html" as ui %}
+{% if form.can_lock %}
+<form method="post" action="{{ form.lock_url }}" class="mt-4 flex justify-end">
+  {% if form.locked %}
+  <input type="hidden" name="locked" value="false">
+  <button type="submit" class="btn btn-ghost h-11 text-xs sm:h-8">{% call ui::icon("unlock", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::ThreadMessage::UnlockConversation.localized(page.locale)) %}{% endcall %}</button>
+  {% else %}
+  <input type="hidden" name="locked" value="true">
+  <button type="submit" class="btn btn-ghost h-11 text-xs sm:h-8">{% call ui::icon("lock", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::ThreadMessage::LockConversation.localized(page.locale)) %}{% endcall %}</button>
+  {% endif %}
+</form>
+{% endif %}

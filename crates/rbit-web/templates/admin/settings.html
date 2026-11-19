@@ -1,0 +1,171 @@
+{% extends "admin/layout.html" %}
+{% import "admin/components.html" as admin %}
+{% import "macros.html" as ui %}
+{% block admin_content %}
+<div class="max-w-2xl">
+{% call admin::heading(AdminMessage::Settings.text(page.locale), InstanceSettingsMessage::Intro.text(page.locale)) %}{% endcall %}
+
+{% if saved %}
+<div role="status" class="mb-5 flex items-center gap-2 rounded-(--radius-ui) border border-line px-3 py-2.5 text-[13px]">
+  {% call ui::icon("check", "size-4 shrink-0 text-success") %}{% endcall %}
+  <span>{% call ui::localized(InstanceSettingsMessage::Saved.text(page.locale)) %}{% endcall %}</span>
+</div>
+{% endif %}
+
+<form method="post" action="/admin/settings" class="box" hx-boost="false" novalidate>
+  <div class="p-4">
+    {% call ui::form_error(error) %}{% endcall %}
+
+    <label class="label" for="site-name">{% call ui::localized(InstanceSettingsMessage::SiteName.text(page.locale)) %}{% endcall %}</label>
+    <input class="input sm:max-w-80" id="site-name" name="site_name" value="{{ form.site_name }}" maxlength="{{ site_name_max_len }}" autocomplete="off" required>
+    <p class="hint">{% call ui::localized(InstanceSettingsMessage::SiteNameHint.text(page.locale)) %}{% endcall %}</p>
+
+
+    <fieldset class="mt-6"><legend class="label">{% call ui::localized(InstanceSettingsMessage::Branding.text(page.locale)) %}{% endcall %}</legend>
+    <p class="hint">{% call ui::localized(InstanceSettingsMessage::BrandingHint.text(page.locale)) %}{% endcall %}</p>
+    <label class="label mt-4" for="primary_color">{% call ui::localized(InstanceSettingsMessage::PrimaryColor.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="primary_color" name="primary_color" value="{{ form.branding.primary_color }}" placeholder="{{ InstanceSettingsMessage::ColorExample.text(page.locale) }}" maxlength="7">
+    <label class="label mt-4" for="primary_text_color">{% call ui::localized(InstanceSettingsMessage::PrimaryTextColor.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="primary_text_color" name="primary_text_color" value="{{ form.branding.primary_text_color }}" placeholder="{{ InstanceSettingsMessage::TextColorExample.text(page.locale) }}" maxlength="7">
+    <p class="hint">{% call ui::localized(InstanceSettingsMessage::ColorHint.text(page.locale)) %}{% endcall %}</p>
+    <label class="label mt-4" for="description">{% call ui::localized(InstanceSettingsMessage::Description.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="description" name="description" value="{{ form.branding.description }}" maxlength="300">
+    <label class="label mt-4" for="welcome_title">{% call ui::localized(InstanceSettingsMessage::WelcomeTitle.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="welcome_title" name="welcome_title" value="{{ form.branding.welcome_title }}" maxlength="100">
+    <label class="label mt-4" for="welcome_message">{% call ui::localized(InstanceSettingsMessage::WelcomeMessage.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="welcome_message" name="welcome_message" value="{{ form.branding.welcome_message }}" maxlength="2000">
+    <label class="label mt-4" for="logo_url">{% call ui::localized(InstanceSettingsMessage::LogoUrl.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="logo_url" name="logo_url" value="{{ form.branding.logo_url }}" maxlength="2048">
+    <label class="label mt-4" for="favicon_url">{% call ui::localized(InstanceSettingsMessage::FaviconUrl.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="favicon_url" name="favicon_url" value="{{ form.branding.favicon_url }}" maxlength="2048">
+    <label class="label mt-4" for="app_icon_url">{% call ui::localized(InstanceSettingsMessage::AppIconUrl.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="app_icon_url" name="app_icon_url" value="{{ form.branding.app_icon_url }}" maxlength="2048">
+    <label class="label mt-4" for="footer_text">{% call ui::localized(InstanceSettingsMessage::FooterText.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="footer_text" name="footer_text" value="{{ form.branding.footer_text }}" maxlength="300">
+    <label class="label mt-4" for="support_url">{% call ui::localized(InstanceSettingsMessage::SupportUrl.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="support_url" name="support_url" value="{{ form.branding.support_url }}" maxlength="2048">
+    <label class="label mt-4" for="terms_url">{% call ui::localized(InstanceSettingsMessage::TermsUrl.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="terms_url" name="terms_url" value="{{ form.branding.terms_url }}" maxlength="2048">
+    <label class="label mt-4" for="privacy_url">{% call ui::localized(InstanceSettingsMessage::PrivacyUrl.text(page.locale)) %}{% endcall %}</label>
+    <input class="input" id="privacy_url" name="privacy_url" value="{{ form.branding.privacy_url }}" maxlength="2048">
+    <label class="mt-4 flex items-center gap-2"><input type="checkbox" name="show_powered_by" value="true" {% if form.branding.show_powered_by %}checked{% endif %}> {% call ui::localized(InstanceSettingsMessage::ShowPoweredBy.text(page.locale)) %}{% endcall %}</label>
+    <label class="mt-4 flex items-center gap-2"><input type="checkbox" name="show_version" value="true" {% if form.branding.show_version %}checked{% endif %}> {% call ui::localized(InstanceSettingsMessage::ShowVersion.text(page.locale)) %}{% endcall %}</label>
+    <label class="mt-4 flex items-center gap-2"><input type="checkbox" name="show_features" value="true" {% if form.branding.show_features %}checked{% endif %}> {% call ui::localized(InstanceSettingsMessage::ShowFeatures.text(page.locale)) %}{% endcall %}</label>
+    </fieldset>
+
+    <fieldset class="mt-6">
+      <legend class="label">{% call ui::localized(InstanceSettingsMessage::Registration.text(page.locale)) %}{% endcall %}</legend>
+      <div class="box overflow-hidden">
+        <label class="flex cursor-pointer items-start gap-3 border-b border-line px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="registration" value="open" class="mt-1 accent-(--ink)" {% if form.registration_open %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::Open.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::OpenText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+        <label class="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="registration" value="closed" class="mt-1 accent-(--ink)" {% if !form.registration_open %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::Closed.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::ClosedText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset class="mt-6">
+      <legend class="label">{% call ui::localized(InstanceSettingsMessage::Browsing.text(page.locale)) %}{% endcall %}</legend>
+      <div class="box overflow-hidden">
+        <label class="flex cursor-pointer items-start gap-3 border-b border-line px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="sign_in" value="optional" class="mt-1 accent-(--ink)" {% if !form.require_sign_in %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::BrowsingOpen.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::BrowsingOpenText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+        <label class="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="sign_in" value="required" class="mt-1 accent-(--ink)" {% if form.require_sign_in %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::BrowsingSignedIn.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::BrowsingSignedInText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset class="mt-6">
+      <legend class="label">{% call ui::localized(InstanceSettingsMessage::Explore.text(page.locale)) %}{% endcall %}</legend>
+      <div class="box overflow-hidden">
+        <label class="flex cursor-pointer items-start gap-3 border-b border-line px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="explore" value="enabled" class="mt-1 accent-(--ink)" {% if form.explore_enabled %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::ExploreEnabled.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::ExploreEnabledText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+        <label class="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="explore" value="disabled" class="mt-1 accent-(--ink)" {% if !form.explore_enabled %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::ExploreDisabled.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::ExploreDisabledText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset class="mt-6">
+      <legend class="label">{% call ui::localized(InstanceSettingsMessage::OrgCreation.text(page.locale)) %}{% endcall %}</legend>
+      <div class="box overflow-hidden">
+        <label class="flex cursor-pointer items-start gap-3 border-b border-line px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="org_creation" value="any_user" class="mt-1 accent-(--ink)" {% if !form.admins_only_orgs %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::AnyUser.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::AnyUserText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+        <label class="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="org_creation" value="admins_only" class="mt-1 accent-(--ink)" {% if form.admins_only_orgs %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::AdminsOnly.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::AdminsOnlyText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset class="mt-6">
+      <legend class="label">{% call ui::localized(InstanceSettingsMessage::DefaultVisibility.text(page.locale)) %}{% endcall %}</legend>
+      <div class="box overflow-hidden">
+        <label class="flex cursor-pointer items-start gap-3 border-b border-line px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="default_visibility" value="public" class="mt-1 accent-(--ink)" {% if !form.private_by_default %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::Public.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::PublicText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+        <label class="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-subtle has-checked:bg-subtle">
+          <input type="radio" name="default_visibility" value="private" class="mt-1 accent-(--ink)" {% if form.private_by_default %}checked{% endif %}>
+          <span>
+            <span class="block font-medium">{% call ui::localized(InstanceSettingsMessage::Private.text(page.locale)) %}{% endcall %}</span>
+            <span class="block text-[13px] text-ink-muted">{% call ui::localized(InstanceSettingsMessage::PrivateText.text(page.locale)) %}{% endcall %}</span>
+          </span>
+        </label>
+      </div>
+      <p class="hint">{% call ui::localized(InstanceSettingsMessage::VisibilityHint.text(page.locale)) %}{% endcall %}</p>
+    </fieldset>
+
+    <label class="label mt-6" for="digest-hour">{% call ui::localized(InstanceSettingsMessage::DigestTime.text(page.locale)) %}{% endcall %}</label>
+    <div class="relative w-full sm:w-48">
+      <select class="input cursor-pointer appearance-none pe-9" id="digest-hour" name="digest_hour" aria-describedby="digest-hour-hint">
+        {% for (hour, label, selected) in form.digest_hours() %}<option value="{{ hour }}"{% if selected %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      {% call ui::icon("chevron-down", "pointer-events-none absolute inset-e-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-muted") %}{% endcall %}
+    </div>
+    <p class="hint" id="digest-hour-hint">{% call ui::localized(InstanceSettingsMessage::DigestHint.text(page.locale)) %}{% endcall %}</p>
+  </div>
+  <div class="flex justify-end border-t border-line px-4 py-3">
+    <button class="btn btn-primary w-full sm:w-auto" type="submit">{% call ui::localized(InstanceSettingsMessage::Save.text(page.locale)) %}{% endcall %}</button>
+  </div>
+</form>
+</div>
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+<div class="mb-3 flex min-h-8 flex-wrap items-center gap-3">
+  {% include "repo/ref_switcher.html" %}
+  {% include "repo/breadcrumbs.html" %}
+</div>
+
+<section class="box overflow-hidden" aria-label="{{ rbit_localization::RepoHistoryMessage::BlameOf { file: file_name }.text(page.locale) }}">
+  {% include "repo/latest_commit.html" %}
+
+  <div class="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-4 py-1.5 text-xs text-ink-muted">
+    <span class="font-medium text-ink">{% call ui::localized(rbit_localization::RepoBrowseLabel::Blame.text(page.locale)) %}{% endcall %}</span>
+    <div class="ms-auto flex">
+      <a href="{{ blob_url }}" class="btn h-7 rounded-e-none px-2.5 text-xs sm:h-7">{% call ui::localized(rbit_localization::RepoHistoryLabel::ViewFile.text(page.locale)) %}{% endcall %}</a>
+      <a href="{{ raw_url }}" class="btn -ms-px h-7 rounded-s-none px-2.5 text-xs sm:h-7" hx-boost="false">{% call ui::localized(rbit_localization::RepoBrowseLabel::Raw.text(page.locale)) %}{% endcall %}</a>
+    </div>
+  </div>
+
+  {% match content %}
+  {% when BlameContent::Hunks(hunks) %}
+  {% if hunks.is_empty() %}
+  <p class="px-4 py-14 text-center text-[13px] text-ink-muted">{% call ui::localized(rbit_localization::RepoHistoryLabel::FileEmpty.text(page.locale)) %}{% endcall %}</p>
+  {% else %}
+  {#- One scroller for the whole file, its lines in virtual blocks like repo/blob.html;
+      consecutive hunks share a block, each headed by its commit (two rows tall, counted
+      in `data-rows`; see src/views/blame.rs). The header's text stays in view while
+      the code scrolls sideways. -#}
+  <div class="blame-scroll overflow-x-auto" dir="ltr">
+    <div class="code-lines blame-lines {{ self.code_columns() }}">
+      {%- for block in self.blocks() %}
+      <div class="vblock" data-rows="{{ block.rows() }}">
+        {%- for entry in block.entries() %}
+        {%- match entry %}
+        {%- when BlameRow::Header(hunk) %}
+        <div class="blame-hunk"><div class="blame-hunk-info">
+          {%- call ui::avatar(hunk.commit.avatar, "size-4 text-[8px]") %}{% endcall -%}
+          <a href="{{ hunk.commit.url }}" class="min-w-0 flex-1 truncate font-medium hover:underline hover:underline-offset-4" title="{{ hunk.commit.summary }}">{{ hunk.commit.summary }}</a>
+          {%- if let Some(source) = hunk.source_path %}<span class="hidden shrink-0 font-mono text-ink-faint md:inline" dir="ltr" title="{{ rbit_localization::RepoHistoryLabel::PathInThatCommit.text(page.locale) }}">{{ source }}</span>{% endif -%}
+          <span class="hidden shrink-0 text-ink-muted sm:inline">{{ hunk.commit.author }}</span>
+          <time class="shrink-0 text-ink-faint" datetime="{{ hunk.commit.when_iso }}" title="{{ hunk.commit.when_iso }}">{% call ui::localized(hunk.commit.when.relative(page.locale)) %}{% endcall %}</time>
+        </div></div>
+        {%- when BlameRow::Line(line) %}
+        <div class="code-line" id="L{{ line.number }}"><span class="line-number" data-line="{{ line.number }}"></span><span class="line-code">{{ line.html|safe }}</span></div>
+        {%- endmatch %}
+        {%- endfor %}
+      </div>
+      {%- endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% when BlameContent::Binary %}
+  <p class="px-4 py-14 text-center text-[13px] text-ink-muted">{% call ui::localized(rbit_localization::RepoHistoryLabel::BinaryCannotBeBlamed.text(page.locale)) %}{% endcall %} <a href="{{ raw_url }}" class="link" hx-boost="false">{% call ui::localized(rbit_localization::RepoBrowseLabel::Download.text(page.locale)) %}{% endcall %}</a></p>
+  {% when BlameContent::TooLarge %}
+  <p class="px-4 py-14 text-center text-[13px] text-ink-muted">{% call ui::localized(rbit_localization::RepoHistoryLabel::TooLargeToBlame.text(page.locale)) %}{% endcall %} <a href="{{ blob_url }}" class="link">{% call ui::localized(rbit_localization::RepoHistoryLabel::ViewTheFile.text(page.locale)) %}{% endcall %}</a></p>
+  {% endmatch %}
+</section>
+{% endblock %}

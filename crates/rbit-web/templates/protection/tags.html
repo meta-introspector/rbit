@@ -1,0 +1,25 @@
+{% extends "repo/settings_layout.html" %}
+{% import "macros.html" as ui %}
+{% block settings_content %}
+<div class="max-w-4xl">
+  <h1 class="text-xl font-semibold">{% call ui::localized(ProtectionMessage::TagsTitle.text(page.locale)) %}{% endcall %}</h1>
+  <p class="mt-2 text-sm text-ink-muted">{% call ui::localized(ProtectionMessage::TagsIntro.text(page.locale)) %}{% endcall %}</p>
+  <form method="post" action="{{ url }}" class="box mt-6 p-4">
+    <label for="tag-pattern" class="block text-sm font-medium">{% call ui::localized(ProtectionMessage::TagsPattern.text(page.locale)) %}{% endcall %}</label>
+    <input id="tag-pattern" name="pattern" class="input mt-2 w-full" maxlength="255" placeholder="{{ ProtectionMessage::TagsPlaceholder.text(page.locale) }}" required>
+    <p class="mt-2 text-sm text-ink-muted">{% call ui::localized(ProtectionMessage::TagsHelp.text(page.locale)) %}{% endcall %}</p>
+    <button class="btn btn-primary mt-3" type="submit">{% call ui::localized(ProtectionMessage::TagsProtect.text(page.locale)) %}{% endcall %}</button>
+  </form>
+  <ul class="box mt-6">
+  {% for (id, pattern) in rows %}
+    <li class="border-b border-line p-4 last:border-b-0">
+      <code class="break-all"><bdi dir="ltr">{{ pattern }}</bdi></code>
+      <form method="post" action="{{ url }}/{{ id }}/delete" class="mt-3 flex flex-wrap items-center gap-3">
+        <label class="text-sm"><input type="checkbox" name="confirm" required> {% call ui::localized(ProtectionMessage::TagsConfirm.text(page.locale)) %}{% endcall %}</label>
+        <button type="submit" class="btn btn-danger">{% call ui::localized(ProtectionMessage::TagsRemove.text(page.locale)) %}{% endcall %}</button>
+      </form>
+    </li>
+  {% endfor %}
+  </ul>
+</div>
+{% endblock %}

@@ -1,0 +1,437 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "rbit Actions workflow identity API",
+    "version": "1",
+    "description": "Task-only OIDC identity issuance with public discovery and ES256 JWKS. These routes are outside /api/v1 and independent of the general REST API switch; Actions must be enabled. Issuer identity derives from the configured public HTTPS server URL, never the request Host header."
+  },
+  "servers": [
+    {
+      "url": "https://git.example.com",
+      "description": "Replace with the configured public HTTPS server URL."
+    }
+  ],
+  "paths": {
+    "/api/actions/oidc/.well-known/openid-configuration": {
+      "get": {
+        "operationId": "getActionsOidcDiscovery",
+        "summary": "Read workflow identity discovery metadata",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Public metadata, cached for 300 seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "public, max-age=300"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Actions disabled; the unmounted route may return the normal HTML404 page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query, unsupported API version, invalid audience or issuer/key configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable or request timed out. A timeout response may have an empty body."
+          }
+        }
+      }
+    },
+    "/api/actions/oidc/jwks": {
+      "get": {
+        "operationId": "getActionsOidcJwks",
+        "summary": "Read current, next and previous public verification keys",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Public metadata, cached for 300 seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jwks"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "public, max-age=300"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Actions disabled; the unmounted route may return the normal HTML404 page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query, unsupported API version, invalid audience or issuer/key configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "IP throttling.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable or request timed out. A timeout response may have an empty body."
+          }
+        }
+      }
+    },
+    "/api/actions/oidc/token": {
+      "get": {
+        "operationId": "requestActionsOidcToken",
+        "summary": "Issue an identity for the current eligible workflow task",
+        "description": "Only running trusted non-fork, non-PR tasks with explicit id-token: write and live repository, actor, runner and environment authority qualify. A task may mint at most 60 identities per UTC minute. All token responses use Cache-Control: no-store. Unknown query fields are rejected.",
+        "security": [
+          {
+            "TaskBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "audience",
+            "in": "query",
+            "required": false,
+            "description": "Defaults to the configured issuer. Must contain 1\u2013512 UTF-8 bytes, no control characters and no surrounding whitespace. Configure an exact matching audience in the provider.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "api-version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Issued identity. Expiry is bounded by five minutes and the remaining task timeout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing task Bearer authorization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Current task or workflow policy refused issuance, or the task issuance budget was exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task credential unknown or revoked. When Actions is disabled, the unmounted route may instead return the normal HTML404 page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query, unsupported API version, invalid audience or issuer/key configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "IP throttling.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable or request timed out. A timeout response may have an empty body."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "TaskBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "rbit workflow task credential",
+        "description": "The runner-provided ACTIONS_ID_TOKEN_REQUEST_TOKEN for the current task. A personal access token, page session or runner registration credential cannot be used."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "message",
+          "code"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "ES256 JWT. Expires within 300 seconds and no later than the admitted task timeout. Never log this value."
+          }
+        }
+      },
+      "Jwk": {
+        "type": "object",
+        "required": [
+          "kty",
+          "crv",
+          "alg",
+          "use",
+          "kid",
+          "x",
+          "y"
+        ],
+        "properties": {
+          "kty": {
+            "const": "EC"
+          },
+          "crv": {
+            "const": "P-256"
+          },
+          "alg": {
+            "const": "ES256"
+          },
+          "use": {
+            "const": "sig"
+          },
+          "kid": {
+            "type": "string"
+          },
+          "x": {
+            "type": "string"
+          },
+          "y": {
+            "type": "string"
+          }
+        }
+      },
+      "Jwks": {
+        "type": "object",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "$ref": "#/components/schemas/Jwk"
+            }
+          }
+        }
+      },
+      "Discovery": {
+        "type": "object",
+        "required": [
+          "issuer",
+          "jwks_uri",
+          "response_types_supported",
+          "subject_types_supported",
+          "id_token_signing_alg_values_supported",
+          "claims_supported"
+        ],
+        "properties": {
+          "issuer": {
+            "type": "string",
+            "format": "uri"
+          },
+          "jwks_uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "response_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "id_token"
+              ]
+            }
+          },
+          "subject_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "public"
+              ]
+            }
+          },
+          "id_token_signing_alg_values_supported": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "ES256"
+              ]
+            }
+          },
+          "claims_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

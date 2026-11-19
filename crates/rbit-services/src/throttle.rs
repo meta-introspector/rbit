@@ -1,0 +1,298 @@
+//! Rate limiting for authentication and other abuse-prone endpoints.
+//!
+//! Milestone 1 workstream S owns this file. The API below is a contract used by other
+//! workstreams (email recovery, SSH); keep the signatures stable.
+//!
+//! Every `(scope, key)` pair has a budget that refills steadily up to a burst size. Each
+//! [`ThrottleService::check`] spends one unit, each [`ThrottleService::record_failure`]
+//! spends extra (so guessing exhausts the budget much faster than ordinary use), and
+//! [`ThrottleService::reset`] restores the full budget after a success.
+//!
+//! The implementation is the generic cell rate algorithm: a bucket is a single
+//! "theoretical arrival time" instant, so state is one `Instant` per key. State lives in
+//! memory, which is right for a single binary: a restart forgets it, but an attacker
+//! cannot restart the server.
+
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
+};
+
+use crate::{ServiceContext, ServiceError};
+
+/// What is being throttled. Each scope has its own limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThrottleScope {
+    /// Account name changes, keyed by the stable account ID.
+    AccountRename,
+    /// Password sign-in attempts (keyed by client address, by login name and by the
+    /// account the login resolves to).
+    SignIn,
+    /// Password re-checks for a signed-in account, e.g. before changing its email or
+    /// password (keyed by account).
+    PasswordCheck,
+    /// Account creation (keyed by client address).
+    SignUp,
+    /// Second-factor code attempts (keyed by account).
+    TwoFactor,
+    /// Password-reset and verification emails (keyed by client address and by address).
+    EmailRequest,
+    /// HTTP Basic credentials on the Git endpoints (keyed by client address and login).
+    GitAuth,
+    /// SSH authentication attempts (keyed by client address).
+    SshAuth,
+    /// Access tokens presented to the REST API (keyed by client address); invalid ones cost extra.
+    ApiAuth,
+    /// Authenticated REST API requests (keyed by account), so one script cannot monopolise the instance.
+    ApiRequest,
+    /// Issues, pull requests, comments and reviews created or edited (keyed by account).
+    Content,
+    /// Milestone 3 (N): notification emails (keyed by recipient address). Over budget, the
+    /// email is skipped; the notification stays in the inbox.
+    NotificationEmail,
+    /// Milestone 3 (O): returns from external sign-in providers (keyed by client address);
+    /// a callback that fails (bad state, refused token) costs extra.
+    ExternalSignIn,
+    // Actions: S.
+    /// Runner credentials on the runner protocol (keyed by client address). Only failed
+    /// authentication spends it: a runner polling every few seconds never notices, a client
+    /// guessing credentials is stopped ([`ThrottleService::check_client_failures`]).
+    RunnerAuth,
+    /// Runner registrations (keyed by client address); invalid registration tokens cost extra.
+    RunnerRegister,
+}
+
+/// A budget: `burst` units, refilled one per `refill`; failures cost `failure_cost` more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Limit {
+    burst: u32,
+    refill: Duration,
+    failure_cost: u32,
+}
+
+impl Limit {
+    const fn new(burst: u32, refill_seconds: u64, failure_cost: u32) -> Self {
+        Self { burst, refill: Duration::from_secs(refill_seconds), failure_cost }
+    }
+
+    /// The longest a bucket can be "in debt": a completely empty budget.
+    fn capacity(self) -> Duration {
+        self.refill.saturating_mul(self.burst)
+    }
+}
+
+/// A budget is tracked per bucket kind and key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Bucket {
+    Scope(ThrottleScope),
+    /// A scope keyed by client address: many people can share one (offices, carrier NAT,
+    /// a proxy that is not listed as trusted), so it gets [`CLIENT_FACTOR`] times the budget.
+    Client(ThrottleScope),
+    /// Any state-changing request to the web UI, keyed by client address.
+    UnsafeRequest,
+}
+
+/// How much larger per-address budgets are than per-account ones.
+const CLIENT_FACTOR: u32 = 5;
+
+impl Bucket {
+    fn limit(self) -> Limit {
+        match self {
+            Self::Client(scope) => {
+                let limit = Self::Scope(scope).limit();
+                Limit { burst: limit.burst * CLIENT_FACTOR, refill: limit.refill / CLIENT_FACTOR, failure_cost: limit.failure_cost }
+            }
+            // ~7 wrong passwords in quick succession, then one a minute.
+            Self::Scope(ThrottleScope::SignIn | ThrottleScope::PasswordCheck) => Limit::new(20, 20, 2),
+            // Five signups per address or name changes per account, then one every ten minutes.
+            Self::Scope(ThrottleScope::SignUp | ThrottleScope::AccountRename) => Limit::new(5, 600, 0),
+            // ~3 wrong codes quickly, then one every 90 seconds: the 10⁶ code space stays out of reach.
+            Self::Scope(ThrottleScope::TwoFactor) => Limit::new(10, 30, 2),
+            // Three emails, then one every ten minutes.
+            Self::Scope(ThrottleScope::EmailRequest) => Limit::new(3, 600, 0),
+            // A clone or push is 2–3 authenticated requests; wrong passwords cost 11 requests' worth.
+            // API tokens get the same budget: a valid token costs one request, an invalid one eleven.
+            Self::Scope(ThrottleScope::GitAuth | ThrottleScope::ApiAuth) => Limit::new(30, 4, 10),
+            Self::Scope(ThrottleScope::SshAuth) => Limit::new(20, 3, 5),
+            // 300 requests at once, then one per second (3,600 an hour) per account.
+            Self::Scope(ThrottleScope::ApiRequest) => Limit::new(300, 1, 0),
+            // A burst of 30 posts, then one every ten seconds per account.
+            Self::Scope(ThrottleScope::Content) => Limit::new(30, 10, 0),
+            // 30 notification emails at once, then one every two minutes (30 an hour) per address.
+            Self::Scope(ThrottleScope::NotificationEmail) => Limit::new(30, 120, 0),
+            // Ten callbacks at once, then one every 30 seconds; a failure costs three. Only
+            // used per client address, which gets five times that.
+            Self::Scope(ThrottleScope::ExternalSignIn) => Limit::new(10, 30, 3),
+            // Actions: S. Failures only (see `check_client_failures`): ten wrong credentials,
+            // then one every six seconds; per client address five times that.
+            Self::Scope(ThrottleScope::RunnerAuth) => Limit::new(10, 6, 1),
+            // Five registrations, then one a minute; a wrong token costs two more.
+            Self::Scope(ThrottleScope::RunnerRegister) => Limit::new(5, 60, 2),
+            // Generous: a person clicking around never notices, a script hammering forms does.
+            Self::UnsafeRequest => Limit::new(60, 1, 0),
+        }
+    }
+}
+
+/// Keys longer than this are truncated so a hostile client cannot grow memory per entry.
+const MAX_KEY_LEN: usize = 128;
+/// Once this many buckets exist, fully refilled ones are dropped on the next insert.
+const PRUNE_THRESHOLD: usize = 10_000;
+
+type Buckets = HashMap<(Bucket, String), Instant>;
+
+#[derive(Debug, Clone)]
+pub struct ThrottleService {
+    enabled: bool,
+    /// Theoretical arrival time per bucket: the budget is full once `now` reaches it.
+    buckets: Arc<Mutex<Buckets>>,
+}
+
+impl ThrottleService {
+    pub(crate) fn new(ctx: ServiceContext) -> Self {
+        let ServiceContext { config, .. } = ctx;
+        Self::with_enabled(config.security.rate_limit)
+    }
+
+    fn with_enabled(enabled: bool) -> Self {
+        Self { enabled, buckets: Arc::default() }
+    }
+
+    /// Fails with [`ServiceError::RateLimited`] when `key` has exhausted its budget in `scope`.
+    /// Call before doing the expensive or sensitive work.
+    pub fn check(&self, scope: ThrottleScope, key: &str) -> Result<(), ServiceError> {
+        self.spend(Bucket::Scope(scope), key, Instant::now())
+    }
+
+    /// Records a failed attempt (wrong password, bad code), which consumes extra budget.
+    pub fn record_failure(&self, scope: ThrottleScope, key: &str) {
+        self.penalise(Bucket::Scope(scope), key, Instant::now());
+    }
+
+    /// Clears the failure history after a success (e.g. a correct password).
+    pub fn reset(&self, scope: ThrottleScope, key: &str) {
+        if self.enabled {
+            self.lock().remove(&(Bucket::Scope(scope), bucket_key(key)));
+        }
+    }
+
+    /// Like [`Self::check`], for a key that is a client address: the budget is larger,
+    /// because one address can stand for many people.
+    pub fn check_client(&self, scope: ThrottleScope, address: &str) -> Result<(), ServiceError> {
+        self.spend(Bucket::Client(scope), address, Instant::now())
+    }
+
+    /// Like [`Self::record_failure`], for a client address.
+    pub fn record_client_failure(&self, scope: ThrottleScope, address: &str) {
+        self.penalise(Bucket::Client(scope), address, Instant::now());
+    }
+
+    // Actions: S.
+    /// Fails with [`ServiceError::RateLimited`] when `address` has no budget left in `scope`,
+    /// without spending any: for scopes that only failures spend
+    /// ([`ThrottleScope::RunnerAuth`]), charged with [`Self::record_client_failure`].
+    pub fn check_client_failures(&self, scope: ThrottleScope, address: &str) -> Result<(), ServiceError> {
+        self.peek(Bucket::Client(scope), address, Instant::now())
+    }
+
+    /// Like [`Self::reset`], for a client address.
+    pub fn reset_client(&self, scope: ThrottleScope, address: &str) {
+        if self.enabled {
+            self.lock().remove(&(Bucket::Client(scope), bucket_key(address)));
+        }
+    }
+
+    /// Per-client budget for state-changing web requests (form posts), applied by the
+    /// web layer's rate-limit middleware.
+    pub fn check_unsafe_request(&self, client: &str) -> Result<(), ServiceError> {
+        self.spend(Bucket::UnsafeRequest, client, Instant::now())
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Buckets> {
+        // The map is always left consistent, so a panic elsewhere never poisons it meaningfully.
+        self.buckets.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Spends one unit at `now`, or reports how long until one is available.
+    fn spend(&self, bucket: Bucket, key: &str, now: Instant) -> Result<(), ServiceError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let limit = bucket.limit();
+        let mut buckets = self.lock();
+        let key = (bucket, bucket_key(key));
+        let tat = buckets.get(&key).copied().unwrap_or(now).max(now);
+        let next = tat + limit.refill;
+        let debt = next.saturating_duration_since(now);
+        if debt > limit.capacity() {
+            let wait = debt.saturating_sub(limit.capacity());
+            return Err(ServiceError::RateLimited { retry_after_seconds: whole_seconds(wait) });
+        }
+        if buckets.len() >= PRUNE_THRESHOLD && !buckets.contains_key(&key) {
+            buckets.retain(|_, tat| *tat > now);
+        }
+        buckets.insert(key, next);
+        Ok(())
+    }
+
+    /// Whether one unit is available at `now`, without spending it.
+    fn peek(&self, bucket: Bucket, key: &str, now: Instant) -> Result<(), ServiceError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let limit = bucket.limit();
+        let tat = self.lock().get(&(bucket, bucket_key(key))).copied().unwrap_or(now).max(now);
+        let debt = (tat + limit.refill).saturating_duration_since(now);
+        if debt > limit.capacity() {
+            return Err(ServiceError::RateLimited { retry_after_seconds: whole_seconds(debt.saturating_sub(limit.capacity())) });
+        }
+        Ok(())
+    }
+
+    /// Spends the failure surcharge at `now`, never beyond an empty budget.
+    fn penalise(&self, bucket: Bucket, key: &str, now: Instant) {
+        let limit = bucket.limit();
+        if !self.enabled || limit.failure_cost == 0 {
+            return;
+        }
+        let mut buckets = self.lock();
+        let tat = buckets.entry((bucket, bucket_key(key))).or_insert(now);
+        let charged = (*tat).max(now) + limit.refill.saturating_mul(limit.failure_cost);
+        *tat = charged.min(now + limit.capacity());
+    }
+}
+
+/// Keys are compared case-insensitively (logins are) and length-capped.
+fn bucket_key(key: &str) -> String {
+    if let Some(network) = ipv6_network(key) {
+        return network;
+    }
+    let end = key.char_indices().nth(MAX_KEY_LEN).map_or(key.len(), |(index, _)| index);
+    key[..end].to_lowercase()
+}
+
+/// `address` as a client's throttle key: an IPv6 address by its /64, others as they are.
+pub fn client_key(address: &str) -> String {
+    ipv6_network(address).unwrap_or_else(|| address.to_owned())
+}
+
+/// The /64 network of an IPv6 address `key`: one host is given a whole /64 (a VPS, a home
+/// line), so keying by the full address would give one client unlimited buckets.
+fn ipv6_network(key: &str) -> Option<String> {
+    let address: std::net::Ipv6Addr = key.parse().ok()?;
+    if address.to_ipv4_mapped().is_some() {
+        return None;
+    }
+    let [a, b, c, d, ..] = address.segments();
+    Some(format!("{a:x}:{b:x}:{c:x}:{d:x}::/64"))
+}
+
+/// Rounds up, so clients never retry a moment too early; at least one second.
+fn whole_seconds(duration: Duration) -> u64 {
+    let seconds = duration.as_secs() + u64::from(duration.subsec_nanos() > 0);
+    seconds.max(1)
+}
+
+#[cfg(test)]
+mod tests;

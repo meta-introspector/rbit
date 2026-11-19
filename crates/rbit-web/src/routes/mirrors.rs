@@ -1,0 +1,361 @@
+//! Pull mirrors: `/new/mirror` and `/{owner}/{repo}/settings/mirror` (stretch goal).
+//!
+//! Milestone 2 workstream R (repository essentials) owns this file.
+//!
+//! Merged into the page router, so its routes get sessions, CSRF protection, security
+//! headers and error pages automatically. The settings page is for repository
+//! administrators of mirrors only; everyone else gets 404.
+
+use axum::{
+    Form, Json, Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Redirect, Response},
+    routing::{get, post},
+};
+use rbit_core::{User, Visibility};
+use rbit_localization::{Catalog, Locale, RepoCreateLabel, RepoCreateMessage, RepoSettingsLabel};
+use rbit_services::{
+    ServiceError,
+    mirrors::{CreateMirror, MirrorPhase},
+};
+use serde::{Deserialize, Serialize};
+
+use super::{repo::RepoPage, repo_create::owner_options};
+use crate::{
+    AppState,
+    error::{WebError, WebResult},
+    extract::{SignedIn, Viewer},
+    views::{
+        components::FormError,
+        layout::Page,
+        mirrors::{MirrorProgressPage, MirrorSettingsPage, MirrorView, NewMirrorPage},
+        repo_text,
+    },
+};
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/new/mirror", get(new_form).post(create))
+        .route("/{owner}/{repo}/mirror/progress", get(progress))
+        .route("/{owner}/{repo}/mirror/status", get(status))
+        .route("/{owner}/{repo}/settings/mirror", get(settings).post(update))
+        .route("/{owner}/{repo}/settings/mirror/sync", post(sync))
+        .route("/{owner}/{repo}/settings/mirror/remove", post(remove))
+}
+
+// ------------------------------------------------------------------ creating
+
+#[derive(Debug, Deserialize)]
+pub struct NewMirrorForm {
+    #[serde(default)]
+    owner: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    visibility: Option<String>,
+    #[serde(default)]
+    interval: String,
+}
+
+/// The name a mirror of `url` gets by default: the last path segment without `.git`.
+fn suggested_name(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or_default().trim_end_matches('/');
+    let last = path.rsplit('/').next().unwrap_or_default();
+    last.strip_suffix(".git").unwrap_or(last).to_owned()
+}
+
+async fn mirror_page(state: &AppState, user: &User, page: Page, form: &NewMirrorForm, error: FormError) -> WebResult<NewMirrorPage> {
+    let mirrors = &state.services.mirrors;
+    Ok(NewMirrorPage {
+        page: repo_text::titled_as(page, RepoCreateLabel::MirrorARepository),
+        error,
+        disabled: !mirrors.is_enabled(),
+        owners: owner_options(state, user, &form.owner).await?,
+        url: form.url.clone(),
+        name: form.name.clone(),
+        description: form.description.clone(),
+        private: form.visibility.as_deref() == Some(Visibility::Private.as_str()),
+        interval_minutes: if form.interval.is_empty() { mirrors.default_interval_minutes().to_string() } else { form.interval.clone() },
+        min_interval_minutes: mirrors.min_interval_minutes(),
+    })
+}
+
+/// `GET /new/mirror`
+async fn new_form(State(state): State<AppState>, SignedIn(user): SignedIn, page: Page) -> WebResult<NewMirrorPage> {
+    let form = NewMirrorForm {
+        owner: String::new(),
+        url: String::new(),
+        name: String::new(),
+        description: String::new(),
+        visibility: Some(state.services.instance.current().default_visibility.as_str().to_owned()),
+        interval: String::new(),
+    };
+    mirror_page(&state, &user, page, &form, FormError::default()).await
+}
+
+/// `POST /new/mirror`: redirects to the first-fetch progress page.
+async fn create(
+    State(state): State<AppState>,
+    SignedIn(user): SignedIn,
+    page: Page,
+    Form(form): Form<NewMirrorForm>,
+) -> WebResult<Response> {
+    let interval = match form.interval.trim() {
+        "" => Ok(None),
+        text => text.parse().map(Some).map_err(|_| ServiceError::Invalid("the interval must be a number of minutes".to_owned())),
+    };
+    let visibility =
+        form.visibility.as_deref().and_then(Visibility::parse).unwrap_or_else(|| state.services.instance.current().default_visibility);
+    let name = match form.name.trim() {
+        "" => suggested_name(form.url.trim()),
+        name => name.to_owned(),
+    };
+    let result = match interval {
+        Ok(interval_minutes) => {
+            let input = CreateMirror { name, description: form.description.clone(), visibility, url: form.url.clone(), interval_minutes };
+            state.services.mirrors.create(&user, &form.owner, input).await
+        }
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(created) => Ok(Redirect::to(&format!("/{}/{}/mirror/progress", created.owner.name, created.repo.name)).into_response()),
+        Err(error @ (ServiceError::Invalid(_) | ServiceError::Conflict(_))) => {
+            let view = mirror_page(&state, &user, page, &form, FormError::from_message(&error.to_string())).await?;
+            Ok((StatusCode::UNPROCESSABLE_ENTITY, view).into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+/// Progress is readable by anyone who can read the repository; upstream errors
+/// are only disclosed to repository administrators.
+#[derive(Debug, Serialize)]
+struct ProgressStatus {
+    phase: &'static str,
+    message: String,
+    complete: bool,
+}
+
+fn progress_status(mirror: &rbit_core::mirror::Mirror, phase: Option<MirrorPhase>, can_admin: bool, locale: Locale) -> ProgressStatus {
+    let text = |label: RepoCreateLabel| Catalog::new(locale).localized(label).to_string();
+    let (phase, message, complete) = if let Some(phase) = phase {
+        match phase {
+            MirrorPhase::Connecting => ("connecting", text(RepoCreateLabel::Connecting), false),
+            MirrorPhase::Fetching => ("fetching", text(RepoCreateLabel::Fetching), false),
+            MirrorPhase::Finalizing => ("finalizing", text(RepoCreateLabel::Finalizing), false),
+        }
+    } else if mirror.last_sync_at.is_some() {
+        match &mirror.last_error {
+            Some(error) => (
+                "failed",
+                if can_admin {
+                    Catalog::new(locale).localized(RepoCreateMessage::FetchFailed { error }).to_string()
+                } else {
+                    text(RepoCreateLabel::FetchFailedRetry)
+                },
+                false,
+            ),
+            None => ("complete", text(RepoCreateLabel::Complete), true),
+        }
+    } else {
+        ("queued", text(RepoCreateLabel::Queued), false)
+    };
+    ProgressStatus { phase, message, complete }
+}
+
+async fn progress(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    page: Page,
+    Path((owner, repo)): Path<(String, String)>,
+) -> WebResult<Response> {
+    let loaded = RepoPage::load(&state, &viewer, &owner, &repo).await?;
+    let Some(mirror) = loaded.mirror().cloned() else {
+        return Ok(Redirect::to(&loaded.urls.home()).into_response());
+    };
+    let status = progress_status(&mirror, state.services.mirrors.active_phase(mirror.repo_id), loaded.ctx.access.can_admin(), page.locale);
+    if status.complete {
+        return Ok(Redirect::to(&loaded.urls.home()).into_response());
+    }
+    Ok(MirrorProgressPage {
+        page: repo_text::titled(page, RepoCreateLabel::Mirroring, &loaded.ctx.repo.full_name()),
+        header: loaded.header(&state, "code"),
+        status_url: format!("{}/mirror/status", loaded.urls.home()),
+        refresh_url: format!("{}/mirror/progress", loaded.urls.home()),
+        settings_url: format!("{}/settings/mirror", loaded.urls.home()),
+        phase: status.phase,
+        message: status.message,
+    }
+    .into_response())
+}
+
+async fn status(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    locale: crate::localization::RequestLocale,
+    Path((owner, repo)): Path<(String, String)>,
+) -> WebResult<Response> {
+    let locale = locale.document_locale();
+    let context = super::repo::open_pinned(&state, &viewer, &owner, &repo).await?;
+    let status = match state.services.mirrors.find(&context).await? {
+        Some(mirror) => progress_status(&mirror, state.services.mirrors.active_phase(mirror.repo_id), context.access.can_admin(), locale),
+        None => ProgressStatus {
+            phase: "complete",
+            message: Catalog::new(locale).localized(RepoCreateLabel::Stopped).to_string(),
+            complete: true,
+        },
+    };
+    Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
+}
+
+// ------------------------------------------------------------------ settings
+
+/// Loads a mirror for one of its administrators; 404 for everyone and everything else.
+async fn load_mirror(state: &AppState, viewer: &Viewer, owner: &str, repo: &str) -> WebResult<(RepoPage, rbit_core::mirror::Mirror)> {
+    let loaded = RepoPage::load(state, viewer, owner, repo).await?;
+    if !loaded.ctx.access.can_admin() {
+        return Err(WebError::NotFound);
+    }
+    let mirror = loaded.mirror().cloned().ok_or(WebError::NotFound)?;
+    Ok((loaded, mirror))
+}
+
+fn settings_view(state: &AppState, loaded: &RepoPage, mirror: &rbit_core::mirror::Mirror, page: Page) -> MirrorSettingsPage {
+    MirrorSettingsPage {
+        page: repo_text::titled(page, RepoSettingsLabel::Mirror, &loaded.ctx.repo.full_name()),
+        header: loaded.header(state, "settings"),
+        mirror: MirrorView::from(mirror),
+        error: FormError::default(),
+        notice: None,
+        min_interval_minutes: state.services.mirrors.min_interval_minutes(),
+        action_url: format!("{}/settings/mirror", loaded.urls.home()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SettingsQuery {
+    saved: Option<String>,
+    queued: Option<String>,
+}
+
+/// `GET /{owner}/{repo}/settings/mirror`
+async fn settings(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    page: Page,
+    Path((owner, repo)): Path<(String, String)>,
+    Query(query): Query<SettingsQuery>,
+) -> WebResult<MirrorSettingsPage> {
+    let (loaded, mirror) = load_mirror(&state, &viewer, &owner, &repo).await?;
+    let mut view = settings_view(&state, &loaded, &mirror, page);
+    view.notice = match (query.saved, query.queued) {
+        (Some(_), _) => Some(repo_text::text(&view.page, RepoSettingsLabel::Saved)),
+        (None, Some(_)) => Some(repo_text::text(&view.page, RepoSettingsLabel::FetchQueued)),
+        (None, None) => None,
+    };
+    Ok(view)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IntervalForm {
+    #[serde(default)]
+    interval: String,
+}
+
+/// `POST /{owner}/{repo}/settings/mirror`: the fetch interval.
+async fn update(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    page: Page,
+    Path((owner, repo)): Path<(String, String)>,
+    Form(form): Form<IntervalForm>,
+) -> WebResult<Response> {
+    let (loaded, mirror) = load_mirror(&state, &viewer, &owner, &repo).await?;
+    let result = match form.interval.trim().parse() {
+        Ok(minutes) => state.services.mirrors.set_interval(&loaded.ctx, minutes).await,
+        Err(_) => Err(ServiceError::Invalid("the interval must be a number of minutes".to_owned())),
+    };
+    match result {
+        Ok(()) => Ok(Redirect::to(&format!("{}/settings/mirror?saved=1", loaded.urls.home())).into_response()),
+        Err(ServiceError::Invalid(message)) => {
+            let mut view = settings_view(&state, &loaded, &mirror, page);
+            view.error = FormError::from_message(&message);
+            Ok((StatusCode::UNPROCESSABLE_ENTITY, view).into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+/// `POST /{owner}/{repo}/settings/mirror/sync`: fetch now (in the background).
+async fn sync(State(state): State<AppState>, viewer: Viewer, Path((owner, repo)): Path<(String, String)>) -> WebResult<Redirect> {
+    let (loaded, _) = load_mirror(&state, &viewer, &owner, &repo).await?;
+    state.services.mirrors.sync_now(&loaded.ctx).await?;
+    Ok(Redirect::to(&format!("{}/settings/mirror?queued=1", loaded.urls.home())))
+}
+
+/// `POST /{owner}/{repo}/settings/mirror/remove`: stop mirroring.
+async fn remove(State(state): State<AppState>, viewer: Viewer, Path((owner, repo)): Path<(String, String)>) -> WebResult<Redirect> {
+    let (loaded, _) = load_mirror(&state, &viewer, &owner, &repo).await?;
+    state.services.mirrors.remove(&loaded.ctx).await?;
+    Ok(Redirect::to(&format!("{}/settings", loaded.urls.home())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{progress_status, suggested_name};
+    use rbit_core::{RepoId, Timestamp, mirror::Mirror};
+    use rbit_services::mirrors::MirrorPhase;
+
+    fn pending_mirror() -> Mirror {
+        Mirror {
+            repo_id: RepoId(1),
+            url: "https://example.com/upstream.git".parse().unwrap(),
+            interval_minutes: 60,
+            next_sync_at: Timestamp::now(),
+            last_sync_at: None,
+            last_error: None,
+            created_at: Timestamp::now(),
+        }
+    }
+
+    #[test]
+    fn progress_waits_for_a_successfully_recorded_fetch() {
+        let mut mirror = pending_mirror();
+        assert_eq!(progress_status(&mirror, None, true, rbit_localization::Locale::English).phase, "queued");
+        for (phase, expected) in
+            [(MirrorPhase::Connecting, "connecting"), (MirrorPhase::Fetching, "fetching"), (MirrorPhase::Finalizing, "finalizing")]
+        {
+            let status = progress_status(&mirror, Some(phase), true, rbit_localization::Locale::English);
+            assert_eq!(status.phase, expected);
+            assert!(!status.complete);
+        }
+        mirror.last_sync_at = Some(Timestamp::now());
+        assert!(progress_status(&mirror, None, true, rbit_localization::Locale::English).complete);
+        // An active retry is never reported as finished using the previous result.
+        assert!(!progress_status(&mirror, Some(MirrorPhase::Fetching), true, rbit_localization::Locale::English).complete);
+    }
+
+    #[test]
+    fn failures_stay_visible_and_upstream_diagnostics_are_admin_only() {
+        let mut mirror = pending_mirror();
+        mirror.last_sync_at = Some(Timestamp::now());
+        mirror.last_error = Some("private upstream diagnostics".into());
+        let admin = progress_status(&mirror, None, true, rbit_localization::Locale::English);
+        let reader = progress_status(&mirror, None, false, rbit_localization::Locale::English);
+        assert_eq!(admin.phase, "failed");
+        assert!(!admin.complete);
+        assert!(admin.message.contains("private upstream diagnostics"));
+        assert!(!reader.message.contains("private upstream diagnostics"));
+    }
+
+    #[test]
+    fn names_are_suggested_from_the_url() {
+        assert_eq!(suggested_name("https://example.com/group/tool.git"), "tool");
+        assert_eq!(suggested_name("https://example.com/group/tool/"), "tool");
+        assert_eq!(suggested_name("https://example.com/tool.git?x=1"), "tool");
+    }
+}

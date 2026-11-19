@@ -1,0 +1,106 @@
+# syntax=docker/dockerfile:1.7
+#
+# rbit container image: one static-ish binary plus `git`, running as an unprivileged user.
+#
+#   docker build -t rbit .
+#   docker run -d --name rbit -p 3000:3000 -v rbit-data:/data \
+#     -e RBIT_SERVER__PUBLIC_URL=https://git.example.com rbit
+#
+# Configuration comes from RBIT_* environment variables or a TOML file mounted into the
+# container and passed with RBIT_CONFIG=/path/to/rbit.toml. See docs/deployment.md.
+#
+# Released images (ghcr.io/gitrbit/rbit) are built by .github/workflows/release.yml with
+# BINARY=prebuilt: they package the exact release binaries, built natively for each
+# architecture, instead of compiling again under emulation. The default compiles from source.
+
+ARG RUST_VERSION=1
+ARG NODE_VERSION=24
+ARG DEBIAN_RELEASE=trixie
+# `source` (compile in stages 1 and 2) or `prebuilt` (take dist/linux-<arch>/rbit, stage 2b).
+ARG BINARY=source
+
+# ---------------------------------------------------------------- 1. stylesheet
+# Tailwind scans the templates and Rust sources for class names, so only those (and the
+# stylesheet entry point) are copied in; Node never reaches the final image.
+FROM node:${NODE_VERSION}-${DEBIAN_RELEASE}-slim AS assets
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --no-audit --no-fund
+COPY crates/rbit-web/styles crates/rbit-web/styles
+COPY crates/rbit-web/templates crates/rbit-web/templates
+COPY crates/rbit-web/src crates/rbit-web/src
+RUN mkdir -p crates/rbit-web/assets && npm run build:css
+
+# ---------------------------------------------------------------- 2. release build
+FROM rust:${RUST_VERSION}-${DEBIAN_RELEASE} AS build
+WORKDIR /src
+COPY . .
+# Assets are embedded into the binary at compile time, so the CSS must exist first.
+COPY --from=assets /src/crates/rbit-web/assets/app.css /src/crates/rbit-web/assets/deferred.css crates/rbit-web/assets/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    --mount=type=cache,target=/src/.cargo-build \
+    cargo build --release --locked --package rbit-server \
+    && install -D -m 0755 target/release/rbit /out/rbit
+
+FROM build AS binary-source
+
+# ---------------------------------------------------------------- 2b. prebuilt binary
+# Only used with BINARY=prebuilt. BuildKit builds only the stages the final one needs, so
+# a default build never reads dist/, and a prebuilt build skips stages 1 and 2.
+FROM scratch AS binary-prebuilt
+ARG TARGETARCH
+COPY --chmod=0755 dist/linux-${TARGETARCH}/rbit /out/rbit
+
+FROM binary-${BINARY} AS binary
+
+# ---------------------------------------------------------------- 3. runtime
+FROM debian:${DEBIAN_RELEASE}-slim AS runtime
+
+# Release builds add org.opencontainers.image.version, .revision and .created.
+LABEL org.opencontainers.image.title="rbit" \
+      org.opencontainers.image.description="A fast, self-hosted Git platform written in Rust" \
+      org.opencontainers.image.url="https://github.com/GitRbit/rbit" \
+      org.opencontainers.image.source="https://github.com/GitRbit/rbit" \
+      org.opencontainers.image.documentation="https://github.com/GitRbit/rbit/blob/main/docs/deployment.md" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0" \
+      org.opencontainers.image.vendor="The rbit contributors"
+
+# git: the smart-HTTP transport, `git gc` and backups run the git executable.
+# tini: PID 1 that forwards signals and reaps orphaned git processes.
+# curl: the health check below.
+# gpg and openssh-client: repository commit/tag signature verification.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git tini curl gpg openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid 10001 rbit \
+    && useradd --system --uid 10001 --gid rbit --home-dir /data --shell /usr/sbin/nologin rbit \
+    && install -d -o rbit -g rbit -m 0750 /data
+
+COPY --from=binary /out/rbit /usr/local/bin/rbit
+
+# Both listeners bind every interface inside the container; publish them with -p. The SSH
+# server only starts with RBIT_SSH__ENABLED=true; its built-in default bind is loopback,
+# which a published port cannot reach. NO_COLOR keeps `docker logs` free of ANSI escapes.
+ENV RBIT_SERVER__BIND=0.0.0.0:3000 \
+    RBIT_SSH__BIND=0.0.0.0:2222 \
+    RBIT_STORAGE__DATA_DIR=/data \
+    RUST_LOG=info \
+    NO_COLOR=1
+
+USER rbit:rbit
+WORKDIR /data
+VOLUME ["/data"]
+# 3000: HTTP. 2222: the built-in SSH server, when [ssh] enabled = true.
+EXPOSE 3000 2222
+
+# /healthz answers 503 when SQLite or redb cannot be read. If you change the bind port,
+# override this check (docker run --health-cmd …) to match.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["curl", "--fail", "--silent", "--show-error", "--max-time", "4", "http://127.0.0.1:3000/healthz"]
+
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/rbit"]
+CMD ["serve"]

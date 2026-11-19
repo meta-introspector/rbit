@@ -1,0 +1,73 @@
+[package]
+name = "rbit-services"
+description = "Application use-cases for rbit, combining storage, Git and authentication behind HTTP-agnostic APIs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# One integration-test binary (tests/main.rs) instead of one per file.
+autotests = false
+
+[dependencies]
+tempfile.workspace = true
+rbit-notifications.workspace = true
+rbit-wikis = { workspace = true, default-features = false }
+rbit-identity-models.workspace = true
+rbit-actions.workspace = true
+rbit-collaboration = { workspace = true, default-features = false, features = ["applications"] }
+rbit-repositories.workspace = true
+rbit-access.workspace = true
+rbit-core.workspace = true
+rbit-storage.workspace = true
+rbit-auth.workspace = true
+rbit-identity = { workspace = true, features = ["access-tokens", "external", "passkeys", "password-work", "sessions", "two-factor"] }
+rbit-kernel.workspace = true
+rbit-git.workspace = true
+rbit-mail.workspace = true
+# Actions: workflow parsing, triggers and planning.
+rbit-workflow.workspace = true
+# Actions: sealing secrets (U).
+aes-gcm.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+getrandom.workspace = true
+# The first account's setup token is compared in constant time.
+subtle.workspace = true
+metrics.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+ssh-key.workspace = true
+# W: webhook deliveries (signed JSON over HTTP(S), ring-backed rustls).
+reqwest = { workspace = true, features = ["rustls-no-provider", "json"] }
+rustls.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+semver.workspace = true
+same-file.workspace = true
+serde_json.workspace = true
+percent-encoding.workspace = true
+# L: Git LFS (signed transfer tokens).
+base64.workspace = true
+# Milestone 3: external sign-in (O): provider documents (discovery, tokens, GitHub's API).
+# M: importing (the source's API objects).
+serde.workspace = true
+# Actions: S. The masking pass over job outputs and log lines, and gzipped task logs.
+flate2.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile.workspace = true
+sqlx.workspace = true
+# A software authenticator for the passkey tests.
+p256.workspace = true
+base64.workspace = true
+# M: a fake GitHub/Gitea server for the import tests.
+axum.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

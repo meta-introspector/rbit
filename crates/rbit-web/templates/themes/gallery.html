@@ -1,0 +1,52 @@
+{#- The Appearance settings gallery; expects `gallery: views::themes::Gallery`. -#}
+<div data-theme-gallery data-filter="{{ gallery.variant }}" data-asset-version="{{ gallery.asset_version }}">
+  {#- In the body rather than <head>, so boosted navigations (which swap only the body) bring it along. -#}
+  <link rel="stylesheet" href="{{ gallery.stylesheet }}">
+
+  <form method="get" action="{{ gallery.base_url }}" role="search" class="mb-6 flex flex-wrap items-center gap-2">
+    <nav class="theme-segment" aria-label="{{ GalleryMessage::Show.text(page.locale) }}">
+      {%- for link in gallery.filters %}
+      <a href="{{ link.url }}" data-variant-filter="{{ link.key }}"{% if link.is_active %} aria-current="true"{% endif %}>{{ link.label }}</a>
+      {%- endfor %}
+    </nav>
+    {%- if !gallery.variant.is_empty() %}
+    <input type="hidden" name="variant" value="{{ gallery.variant }}">
+    {%- endif %}
+    <div class="relative min-w-0 flex-1 basis-48 sm:max-w-xs">
+      {% call ui::icon("search", "pointer-events-none absolute inset-s-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-faint") %}{% endcall %}
+      <input class="input ps-9" type="search" name="q" value="{{ gallery.query }}" maxlength="100" placeholder="{{ gallery.search_placeholder(page.locale) }}" aria-label="{{ GalleryMessage::Search.text(page.locale) }}" autocapitalize="none" autocomplete="off" spellcheck="false" data-theme-search>
+    </div>
+    {% let count_labels = gallery.count_labels %}{% let count = count_labels.count(gallery.shown) %}
+    <p class="ms-auto text-xs text-ink-faint" data-theme-count aria-live="polite" data-plural="{{ count_labels.count_plural() }}"{% for (category, form) in count_labels.count_forms() %} data-count-{{ category }}="{{ form }}"{% endfor %}{% if count.fallback() %} lang="en"{% endif %}>{% for part in count.parts() %}{% if part.is_slot(0) %}{{ gallery.shown }}{% else %}{{ part.text() }}{% endif %}{% endfor %}</p>
+  </form>
+
+  <form method="post" action="/themes" hx-boost="false" data-theme-form>
+    <input type="hidden" name="next" value="{{ gallery.next }}">
+    <section class="theme-family" data-theme-family="rbit"{% if gallery.defaults_hidden %} hidden{% endif %}>
+      <h2 class="theme-family-title">{% call ui::localized(GalleryMessage::BuiltIn.text(page.locale)) %}{% endcall %}</h2>
+      <ul class="theme-grid">
+        {%- for card in gallery.defaults %}{% include "themes/card.html" %}{% endfor -%}
+      </ul>
+    </section>
+    <section class="theme-family" data-theme-family="rbit Classic"{% if gallery.classic_hidden %} hidden{% endif %}>
+      <h2 class="theme-family-title">{% call ui::localized(GalleryMessage::Classic.text(page.locale)) %}{% endcall %}</h2>
+      <ul class="theme-grid">
+        {%- for card in gallery.classic %}{% include "themes/card.html" %}{% endfor -%}
+      </ul>
+    </section>
+    {%- for family in gallery.families %}
+    <section class="theme-family" data-theme-family="{{ family.name }}"{% if family.hidden %} hidden{% endif %}>
+      <h2 class="theme-family-title">{{ family.name }}<span>{{ family.cards.len() }}</span></h2>
+      <ul class="theme-grid">
+        {%- for card in family.cards %}{% include "themes/card.html" %}{% endfor -%}
+      </ul>
+    </section>
+    {%- endfor %}
+    <p class="py-10 text-center text-[13px] text-ink-muted" data-theme-empty{% if !gallery.nothing_found %} hidden{% endif %}>{% call ui::localized(GalleryMessage::Empty.text(page.locale)) %}{% endcall %}</p>
+  </form>
+
+  {% let credit = rbit_localization::settings::profile::GallerySentence::Credit.rich(page.locale) %}
+  <p class="mt-10 border-t border-line pt-4 text-xs text-ink-faint"{% if credit.fallback() %} lang="en"{% endif %}>
+    {%- for part in credit.parts() %}{% if part.is_slot(0) %}<a class="link" href="https://github.com/tinted-theming/schemes">{% call ui::localized(GalleryMessage::CreditLink.text(page.locale)) %}{% endcall %}</a>{% else if part.is_slot(1) %}<a class="link" href="{{ gallery.licence_url }}" hx-boost="false">{% call ui::localized(GalleryMessage::Licence.text(page.locale)) %}{% endcall %}</a>{% else %}{{ part.text() }}{% endif %}{% endfor -%}
+  </p>
+</div>

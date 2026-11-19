@@ -1,0 +1,28 @@
+[package]
+name = "rbit-transport"
+description = "Git wire protocol (smart HTTP and SSH) for rbit, independent of any web framework."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# One integration-test binary (tests/main.rs) instead of one per file.
+autotests = false
+
+[dependencies]
+rbit-core.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

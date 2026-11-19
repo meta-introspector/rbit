@@ -1,0 +1,25 @@
+# Keep the build context small and free of local state and secrets.
+.git
+.github
+.claude
+target
+.cargo-build
+node_modules
+data
+data*
+rbit.toml
+rustit.toml
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.redb
+**/ssh/
+**/secret.key
+*.log
+docs
+deploy
+Dockerfile
+.dockerignore
+# Generated in the image's Node stage.
+crates/rbit-web/assets/app.css
+crates/rbit-web/assets/deferred.css

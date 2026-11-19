@@ -1,0 +1,865 @@
+{
+  "paths": {
+    "/repos/{owner}/{repo}/security/settings": {
+      "get": {
+        "operationId": "securitySettings",
+        "summary": "Read scanner settings",
+        "tags": [
+          "Security"
+        ],
+        "description": "Repository writers only; hidden findings return 404. Mutations require repository administration and an unrestricted admin-scope token. Scan initiation/completion also accepts live task tokens from the explicitly configured trusted default-branch workflow.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        }
+      },
+      "put": {
+        "operationId": "configureSecurity",
+        "summary": "Configure trusted scanner and merge gate",
+        "tags": [
+          "Security"
+        ],
+        "description": "Repository writers only; hidden findings return 404. Mutations require repository administration and an unrestricted admin-scope token. Scan initiation/completion also accepts live task tokens from the explicitly configured trusted default-branch workflow.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          },
+          "204": {
+            "description": "Configured; prior evidence invalidated"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "scanner",
+                  "workflow",
+                  "require_scan",
+                  "minimum_severity"
+                ],
+                "properties": {
+                  "scanner": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "workflow": {
+                    "type": "string",
+                    "maxLength": 1024
+                  },
+                  "require_scan": {
+                    "type": "boolean"
+                  },
+                  "minimum_severity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/security/scans": {
+      "get": {
+        "operationId": "securityScans",
+        "summary": "List the newest 100 scan attempts",
+        "tags": [
+          "Security"
+        ],
+        "description": "Repository writers only; hidden findings return 404. Mutations require repository administration and an unrestricted admin-scope token. Scan initiation/completion also accepts live task tokens from the explicitly configured trusted default-branch workflow.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        }
+      },
+      "post": {
+        "operationId": "beginSecurityScan",
+        "summary": "Begin a pending scan for an immutable commit",
+        "tags": [
+          "Security"
+        ],
+        "description": "Repository writers only; hidden findings return 404. Mutations require repository administration and an unrestricted admin-scope token. Scan initiation/completion also accepts live task tokens from the explicitly configured trusted default-branch workflow.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          },
+          "201": {
+            "description": "Pending scan with server-generated id"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "commit_sha"
+                ],
+                "properties": {
+                  "commit_sha": {
+                    "type": "string",
+                    "pattern": "^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/security/scans/{id}/sarif": {
+      "post": {
+        "operationId": "finishSecurityScan",
+        "summary": "Complete this scan once using bounded SARIF",
+        "tags": [
+          "Security"
+        ],
+        "description": "Repository writers only; hidden findings return 404. Mutations require repository administration and an unrestricted admin-scope token. Scan initiation/completion also accepts live task tokens from the explicitly configured trusted default-branch workflow.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/sarif+json": {
+              "schema": {
+                "type": "object",
+                "description": "SARIF 2.1.0, exactly one run, explicit invocations/results, at most 1000 findings; local repository paths only. Successful invocations without error notifications are complete."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/security/scans/{id}/findings": {
+      "get": {
+        "operationId": "securityFindings",
+        "summary": "Read 50 findings from this scan",
+        "tags": [
+          "Security"
+        ],
+        "description": "Repository writers only; hidden findings return 404. Mutations require repository administration and an unrestricted admin-scope token. Scan initiation/completion also accepts live task tokens from the explicitly configured trusted default-branch workflow.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/security/findings/{id}/dismissal": {
+      "post": {
+        "operationId": "dismissSecurityFinding",
+        "summary": "Dismiss or reopen a finding with an audit note",
+        "tags": [
+          "Security"
+        ],
+        "description": "Repository writers only; hidden findings return 404. Mutations require repository administration and an unrestricted admin-scope token. Scan initiation/completion also accepts live task tokens from the explicitly configured trusted default-branch workflow.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          },
+          "204": {
+            "description": "Dismissal state updated and audited"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "false_positive",
+                      "accepted_risk",
+                      "used_in_tests",
+                      "reopen"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/security/automation": {
+      "get": {
+        "operationId": "securityAutomation",
+        "summary": "Read native scanning settings",
+        "tags": [
+          "Security"
+        ],
+        "description": "Findings and inventory are visible only to repository writers. Configuration and proposals require current repository administration and an unrestricted admin-scope token. Native scan requests also accept the configured trusted default-branch workflow task. Dependency scanning requires explicit permission to send public package names/versions to OSV/npm. Proposals inherit repository visibility and never merge automatically. Unsupported repairs return 422. Native result evidence cannot be supplied by the caller.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        }
+      },
+      "put": {
+        "operationId": "configureSecurityAutomation",
+        "summary": "Opt in to native scans and package metadata disclosure",
+        "tags": [
+          "Security"
+        ],
+        "description": "Findings and inventory are visible only to repository writers. Configuration and proposals require current repository administration and an unrestricted admin-scope token. Native scan requests also accept the configured trusted default-branch workflow task. Dependency scanning requires explicit permission to send public package names/versions to OSV/npm. Proposals inherit repository visibility and never merge automatically. Unsupported repairs return 422. Native result evidence cannot be supplied by the caller.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          },
+          "204": {
+            "description": "Settings saved and prior native evidence invalidated"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "secrets": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "dependencies": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "package_network_consent": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "require_secrets": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "require_dependencies": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "automatic_pull_requests": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "minimum_severity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4
+                  },
+                  "workflow": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "minimum_severity"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/security/automation/scans": {
+      "post": {
+        "operationId": "requestNativeSecurityScan",
+        "summary": "Request server-owned scans of an exact revision",
+        "tags": [
+          "Security"
+        ],
+        "description": "Findings and inventory are visible only to repository writers. Configuration and proposals require current repository administration and an unrestricted admin-scope token. Native scan requests also accept the configured trusted default-branch workflow task. Dependency scanning requires explicit permission to send public package names/versions to OSV/npm. Proposals inherit repository visibility and never merge automatically. Unsupported repairs return 422. Native result evidence cannot be supplied by the caller.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "commit_sha"
+                ],
+                "properties": {
+                  "commit_sha": {
+                    "type": "string",
+                    "pattern": "^([a-fA-F0-9]{40}|[a-fA-F0-9]{64})$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/security/automation/inventory": {
+      "get": {
+        "operationId": "securityDependencyInventory",
+        "summary": "Read supported public npm lock inventory",
+        "tags": [
+          "Security"
+        ],
+        "description": "Findings and inventory are visible only to repository writers. Configuration and proposals require current repository administration and an unrestricted admin-scope token. Native scan requests also accept the configured trusted default-branch workflow task. Dependency scanning requires explicit permission to send public package names/versions to OSV/npm. Proposals inherit repository visibility and never merge automatically. Unsupported repairs return 422. Native result evidence cannot be supplied by the caller.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commit_sha",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^([a-fA-F0-9]{40}|[a-fA-F0-9]{64})$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/security/automation/updates": {
+      "get": {
+        "operationId": "securityDependencyUpdates",
+        "summary": "Read dependency update proposals",
+        "tags": [
+          "Security"
+        ],
+        "description": "Findings and inventory are visible only to repository writers. Configuration and proposals require current repository administration and an unrestricted admin-scope token. Native scan requests also accept the configured trusted default-branch workflow task. Dependency scanning requires explicit permission to send public package names/versions to OSV/npm. Proposals inherit repository visibility and never merge automatically. Unsupported repairs return 422. Native result evidence cannot be supplied by the caller.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        }
+      },
+      "post": {
+        "operationId": "proposeSecurityDependencyUpdate",
+        "summary": "Create a reviewable supported dependency patch PR",
+        "tags": [
+          "Security"
+        ],
+        "description": "Findings and inventory are visible only to repository writers. Configuration and proposals require current repository administration and an unrestricted admin-scope token. Native scan requests also accept the configured trusted default-branch workflow task. Dependency scanning requires explicit permission to send public package names/versions to OSV/npm. Proposals inherit repository visibility and never merge automatically. Unsupported repairs return 422. Native result evidence cannot be supplied by the caller.",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requested evidence"
+          },
+          "403": {
+            "description": "Insufficient upload or administration authority"
+          },
+          "404": {
+            "description": "Repository or security evidence is not visible"
+          },
+          "409": {
+            "description": "Already completed, retention limit or changed configuration"
+          },
+          "413": {
+            "description": "Report exceeds 1 MiB"
+          },
+          "422": {
+            "description": "Unsupported or malformed SARIF/input"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "commit_sha",
+                  "package"
+                ],
+                "properties": {
+                  "commit_sha": {
+                    "type": "string",
+                    "pattern": "^([a-fA-F0-9]{40}|[a-fA-F0-9]{64})$"
+                  },
+                  "package": {
+                    "type": "string",
+                    "maxLength": 214
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {}
+  }
+}

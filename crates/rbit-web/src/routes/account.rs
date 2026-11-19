@@ -1,0 +1,76 @@
+//! `/{owner}` profile pages. Users and organisations share the namespace; organisations
+//! are rendered by [`super::orgs::profile`].
+
+use axum::{
+    extract::{Path, Query, State},
+    response::{IntoResponse, Response},
+};
+
+use serde::Deserialize;
+
+use crate::{
+    AppState,
+    error::WebResult,
+    extract::Viewer,
+    views::{account::ProfilePage, components::Avatar, layout::Page},
+};
+
+/// `?tab=stars` switches the profile from owned repositories to starred ones.
+#[derive(Debug, Deserialize)]
+pub struct ProfileQuery {
+    tab: Option<String>,
+    year: Option<i32>,
+    calendar: Option<String>,
+}
+
+pub async fn profile(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    page: Page,
+    Path(owner): Path<String>,
+    Query(query): Query<ProfileQuery>,
+) -> WebResult<Response> {
+    let account = state.services.accounts.find_account(&owner).await?;
+    if account.is_organization() {
+        return super::orgs::profile(&state, &viewer, page, account.name.as_str(), query.year, query.calendar.as_deref()).await;
+    }
+    let tab = if query.tab.as_deref() == Some("stars") { "stars" } else { "repositories" };
+    let calendar = crate::views::contributions::ContributionCalendar::new(
+        query.year,
+        "Commits matching this user's account email on default branches.",
+        tab,
+    );
+    let (start, end) = calendar.bounds();
+    let contributions = if query.calendar.is_some() {
+        calendar.populate(&state.services.contributions.account(viewer.user(), &account, start, end).await?)
+    } else {
+        calendar.deferred()
+    };
+    if query.calendar.as_deref() == Some("fragment") {
+        return Ok(crate::views::contributions::ContributionFragment { contributions }.into_response());
+    }
+    let own_repos = state.services.repositories.list_for_owner(viewer.user(), &account).await?;
+    let starred = state.services.stars.starred_by(viewer.user(), &account).await?;
+    let extras = state.services.profiles.public_profile(account.id).await?;
+
+    let listed = if tab == "stars" { &starred } else { &own_repos };
+
+    let joined = crate::views::when::date(account.created_at, page.locale).to_string();
+    Ok(ProfilePage {
+        contributions,
+        page: page.titled(account.label().to_owned()),
+        name: account.name.to_string(),
+        label: account.label().to_owned(),
+        bio: account.bio.clone(),
+        avatar: Avatar::for_account(&account),
+        joined,
+        website: extras.website,
+        location: extras.location,
+        tab,
+        repo_count: own_repos.len(),
+        star_count: starred.len(),
+        repos: super::listing::repo_cards(&state, listed).await?,
+        is_self: viewer.user().is_some_and(|u| u.id() == account.id),
+    }
+    .into_response())
+}

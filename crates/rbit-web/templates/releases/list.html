@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+<div class="mb-3 flex min-h-8 items-center gap-3">
+  <h1 class="text-[13px] font-medium text-ink-muted">{% call ui::localized(rbit_localization::ReleaseLabel::Releases.text(page.locale)) %}{% endcall %}</h1>
+  {% if can_write %}<a href="{{ new_url }}" class="btn btn-primary ms-auto">{% call ui::icon("plus", "size-3.5") %}{% endcall %}{% call ui::localized(rbit_localization::ReleaseLabel::NewRelease.text(page.locale)) %}{% endcall %}</a>{% endif %}
+</div>
+
+{% if releases.is_empty() %}
+<div class="box">
+  {% if can_write %}
+  {% call ui::empty_state("package", rbit_localization::ReleaseLabel::NoReleasesYet.text(page.locale), rbit_localization::ReleaseLabel::EmptyForWriters.text(page.locale)) %}{% endcall %}
+  {% else %}
+  {% call ui::empty_state("package", rbit_localization::ReleaseLabel::NoReleasesYet.text(page.locale), rbit_localization::ReleaseLabel::EmptyForReaders.text(page.locale)) %}{% endcall %}
+  {% endif %}
+</div>
+{% else %}
+<div class="space-y-6">
+  {% for release in releases %}
+  <section class="box overflow-hidden" aria-label="{{ release.name }}">
+    {% include "releases/card.html" %}
+  </section>
+  {% endfor %}
+</div>
+{% call ui::pagination(pagination) %}{% endcall %}
+{% endif %}
+{% endblock %}

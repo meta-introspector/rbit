@@ -1,0 +1,112 @@
+{% import "macros.html" as ui %}
+{% import "repo/diff_counts.html" as stats %}
+{#- The header's theme picker: a dialog fetched by theme-picker.js the first time the palette
+    button is pressed (without scripts that button links to Appearance settings). Rows are plain
+    submit buttons of a theme form; each row's chip carries its own `data-theme`, so it renders
+    in that theme's colours from the combined stylesheet linked here. Highlighting a row (the
+    pointer or the arrow keys) shows it in the preview pane; choosing one applies it. -#}
+<dialog class="tpk" lang="{{ page.locale.tag() }}" dir="{{ page.locale.direction().as_str() }}" aria-label="{{ labels.choose() }}" data-theme-dialog data-label-apply="{{ labels.apply() }}" data-label-applied="{{ labels.applied() }}" data-label-by="{{ labels.by() }}" data-label-credit="{{ labels.credit() }}" data-plural="{{ labels.count_plural() }}"{% for (category, form) in labels.count_forms() %} data-count-{{ category }}="{{ form }}"{% endfor %} data-asset-version="{{ asset_version }}">
+  <link rel="stylesheet" href="{{ stylesheet }}">
+  <div class="tpk-head">
+    <div class="tpk-search">
+      {% call ui::icon("search", "size-4 shrink-0 text-ink-faint") %}{% endcall %}
+      <input type="search" placeholder="{{ labels.search_count(total) }}" aria-label="{{ labels.search() }}" role="combobox" aria-expanded="true" aria-controls="tpk-list" aria-autocomplete="list" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="100" data-tpk-search>
+      <kbd class="kbd hidden sm:inline">Esc</kbd>
+      <button class="btn btn-ghost btn-icon -me-2 sm:hidden" type="button" aria-label="{{ labels.close() }}" data-tpk-close>{% call ui::icon("x", "size-4") %}{% endcall %}</button>
+    </div>
+    <div class="tpk-bar">
+      <div class="theme-segment tpk-segment" role="group" aria-label="{{ labels.show() }}">
+        <button type="button" data-tpk-variant="" aria-pressed="true">{% call ui::localized(labels.all()) %}{% endcall %}</button>
+        <button type="button" data-tpk-variant="dark" aria-pressed="false">{% call ui::localized(labels.dark()) %}{% endcall %}</button>
+        <button type="button" data-tpk-variant="light" aria-pressed="false">{% call ui::localized(labels.light()) %}{% endcall %}</button>
+        <button type="button" data-tpk-variant="colorblind" aria-pressed="false">{% call ui::localized(labels.colorblind()) %}{% endcall %}</button>
+      </div>
+      {% let count = labels.count(total) %}<p class="ms-auto text-xs text-ink-faint" data-tpk-count aria-live="polite"{% if count.fallback() %} lang="en"{% endif %}>{% for part in count.parts() %}{% if part.is_slot(0) %}{{ total }}{% else %}{{ part.text() }}{% endif %}{% endfor %}</p>
+    </div>
+  </div>
+
+  <div class="tpk-body">
+    <nav class="tpk-index" aria-label="{{ labels.families() }}">
+      <a href="#tpk-recent" data-tpk-jump="tpk-recent" hidden>{% call ui::localized(labels.recent()) %}{% endcall %}</a>
+      {%- for group in groups %}
+      <a href="#tpk-g{{ loop.index }}" data-tpk-jump="tpk-g{{ loop.index }}">{% if group.name == "Built in" %}{% call ui::localized(labels.built_in()) %}{% endcall %}{% else if group.name == "More themes" %}{% call ui::localized(labels.more()) %}{% endcall %}{% else %}{{ group.name }}{% endif %}<span>{{ group.rows.len() }}</span></a>
+      {%- endfor %}
+    </nav>
+
+    <form class="tpk-list" id="tpk-list" method="post" action="/themes" hx-boost="false" role="listbox" aria-label="{{ labels.themes() }}" data-theme-form>
+      <section class="tpk-group" id="tpk-recent" data-tpk-recent hidden>
+        <h3 class="tpk-group-title">{% call ui::localized(labels.recent()) %}{% endcall %}</h3>
+      </section>
+      {%- for group in groups %}
+      <section class="tpk-group" id="tpk-g{{ loop.index }}" data-tpk-group>
+        <h3 class="tpk-group-title">{% if group.name == "Built in" %}{% call ui::localized(labels.built_in()) %}{% endcall %}{% else if group.name == "More themes" %}{% call ui::localized(labels.more()) %}{% endcall %}{% else %}{{ group.name }}{% endif %}<span>{{ group.rows.len() }}</span></h3>
+        {%- for row in group.rows %}
+        {%- if let Some(letter) = row.letter %}
+        <p class="tpk-letter" data-tpk-letter>{{ letter }}</p>
+        {%- endif %}
+        <button class="tpk-opt" id="tpk-{{ row.card.slug }}" type="submit" name="theme" value="{{ row.card.slug }}" role="option" aria-selected="false" aria-pressed="{{ row.card.is_current }}" data-variant="{{ row.card.variant }}" data-counterpart="{{ row.card.counterpart }}" data-search="{{ row.search }}" data-family="{{ group.name }}" data-family-label="{% if group.name == "Built in" %}{{ labels.built_in() }}{% else if group.name == "More themes" %}{{ labels.more() }}{% else %}{{ group.name }}{% endif %}" title="{{ row.card.credit }}" tabindex="-1" data-tpk-option>
+          <span class="tpk-chip" data-theme="{{ row.card.slug }}" aria-hidden="true"><b>Aa</b><i></i><i></i><i></i><i></i></span>
+          <span class="tpk-name">{% if row.card.slug == "system" %}{% call ui::localized(labels.system()) %}{% endcall %}{% else %}{{ row.card.name }}{% endif %}</span>
+          <span class="tpk-variant">{% call ui::localized(labels.variant(row.card.variant)) %}{% endcall %}</span>
+          {% call ui::icon("check", "tpk-check size-3.5") %}{% endcall %}
+        </button>
+        {%- endfor %}
+      </section>
+      {%- endfor %}
+      <p class="py-16 text-center text-[13px] text-ink-muted" data-tpk-empty hidden>{% call ui::localized(labels.empty()) %}{% endcall %}</p>
+    </form>
+
+    {#- The highlighted theme on a miniature repository page; theme-picker.js retargets
+        `data-theme` as the highlight moves. -#}
+    <aside class="tpk-side" aria-label="{{ labels.preview() }}">
+      <div class="tpk-info">
+        <div class="min-w-0">
+          <p class="tpk-info-name" data-tpk-name>{% call ui::localized(labels.system()) %}{% endcall %}</p>
+          <p class="tpk-info-meta" data-tpk-meta>{% call ui::localized(labels.built_in()) %}{% endcall %} · {% call ui::localized(labels.auto()) %}{% endcall %}</p>
+        </div>
+        <button class="btn btn-primary ms-auto shrink-0" type="submit" form="tpk-list" name="theme" value="system" data-tpk-apply>{% call ui::localized(labels.apply()) %}{% endcall %}</button>
+      </div>
+      <div class="tpk-preview" data-theme="system" data-tpk-preview aria-hidden="true">
+        <div class="pv-top">
+          {% call ui::brand_logo(page, "size-3.5", 14) %}{% endcall %}
+          <span class="pv-crumb"><span>{{ page.site_name }}</span> / <b>core</b></span>
+          <span class="pv-btn">{% call ui::icon("star", "size-3") %}{% endcall %} {% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::Star)) %}{% endcall %}</span>
+          <span class="pv-btn pv-primary">{% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::Clone)) %}{% endcall %}</span>
+        </div>
+        <div class="pv-tabs"><span class="pv-tab-on">{% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::Code)) %}{% endcall %}</span><span>{% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::Issues)) %}{% endcall %} <i>3</i></span><span>{% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::PullRequests)) %}{% endcall %} <i>1</i></span><span>{% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::Releases)) %}{% endcall %}</span></div>
+        <div class="pv-main">
+          <div class="pv-box">
+            <div class="pv-box-head"><span dir="ltr">src/main.rs</span><span class="pv-faint">{% call ui::localized(labels.preview_lines(8)) %}{% endcall %}</span></div>
+            <pre class="pv-code" dir="ltr"><span class="pv-ln">1</span><span class="pv-k">use</span> std::<span class="pv-t">io</span>;
+<span class="pv-ln">2</span>
+<span class="pv-ln">3</span><span class="pv-c">/// Greets the world.</span>
+<span class="pv-ln">4</span><span class="pv-k">fn</span> <span class="pv-f">main</span>() -&gt; <span class="pv-t">io::Result</span>&lt;()&gt; {
+<span class="pv-ln">5</span>    <span class="pv-k">let</span> count = <span class="pv-n">42</span>;
+<span class="pv-ln">6</span>    <span class="pv-f">println!</span>(<span class="pv-s">"hello, {count}"</span>);
+<span class="pv-ln">7</span>    <span class="pv-t">Ok</span>(())
+<span class="pv-ln">8</span>}</pre>
+          </div>
+          <div class="pv-box">
+            <div class="pv-box-head"><span dir="ltr">lib.rs</span>{% call stats::counts(2, 1, "") %}{% endcall %}</div>
+            <pre class="pv-code pv-diff" dir="ltr"><span class="pv-del-line">-    <span class="pv-k">let</span> name = <span class="pv-s">"world"</span>;</span><span class="pv-add-line">+    <span class="pv-k">let</span> name = <span class="pv-f">env</span>(<span class="pv-s">"USER"</span>);</span><span class="pv-add-line">+    <span class="pv-k">let</span> times = <span class="pv-n">3</span>;</span></pre>
+          </div>
+          <div class="pv-row">
+            <span class="pv-pill pv-ok">{% call ui::icon("circle-check", "size-3") %}{% endcall %} {% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::ChecksPassed)) %}{% endcall %}</span>
+            <span class="pv-pill pv-warn">{% call ui::icon("circle-dot", "size-3") %}{% endcall %} {% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::ReviewPending)) %}{% endcall %}</span>
+            <span class="pv-pill pv-bad">{% call ui::icon("circle-slash", "size-3") %}{% endcall %} {% call ui::localized(labels.preview_failing(1)) %}{% endcall %}</span>
+          </div>
+          <p class="pv-text">{% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::Tagline)) %}{% endcall %} <span class="pv-link">{% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::Link)) %}{% endcall %}</span> <span class="pv-faint">{% call ui::localized(labels.preview_text(rbit_localization::ThemePreviewMessage::Updated)) %}{% endcall %}</span></p>
+        </div>
+      </div>
+      <p class="tpk-author" data-tpk-author></p>
+    </aside>
+  </div>
+
+  <footer class="tpk-foot">
+    <p class="hidden items-center gap-3 sm:flex">
+      <span><kbd class="kbd">↑</kbd> <kbd class="kbd">↓</kbd> {% call ui::localized(labels.preview()) %}{% endcall %}</span>
+      <span><kbd class="kbd">↵</kbd> {% call ui::localized(labels.or_apply()) %}{% endcall %}</span>
+      <span><kbd class="kbd">Esc</kbd> {% call ui::localized(labels.close()) %}{% endcall %}</span>
+    </p>
+  </footer>
+</dialog>

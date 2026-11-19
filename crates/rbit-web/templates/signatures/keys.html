@@ -1,0 +1,13 @@
+{% extends "repo/settings_layout.html" %}
+{% import "macros.html" as ui %}
+{% block settings_content %}
+<h1 class="text-lg font-semibold">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningKeys.text(page.locale)) %}{% endcall %}</h1>
+<p class="my-3 text-sm text-ink-muted">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningKeysHelp.text(page.locale)) %}{% endcall %}</p>
+<ul class="mb-4 space-y-2">{% for key in keys %}<li class="box flex flex-wrap items-center justify-between gap-3 p-3"><span class="min-w-0 flex-1 break-all">{{ key.name }} <span class="badge">{{ key.kind }}</span></span><form class="shrink-0" method="post" action="{{ header.home_url }}/settings/signing-keys/{{ key.id }}/delete"><button type="submit" class="btn btn-danger">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningKeyRemove.text(page.locale)) %}{% endcall %}</button></form></li>{% endfor %}</ul>
+<form method="post" action="{{ header.home_url }}/settings/signing-keys" class="box space-y-3 p-4">
+<label class="block text-sm">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningKeyName.text(page.locale)) %}{% endcall %}<input class="input mt-1 w-full" name="name" maxlength="100" required></label>
+<label class="block text-sm">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningKeyKind.text(page.locale)) %}{% endcall %}<select class="input mt-1 w-full" name="kind"><option value="ssh">SSH</option><option value="openpgp">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningOpenPgp.text(page.locale)) %}{% endcall %}</option></select></label>
+<label class="block text-sm">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningKeyMaterial.text(page.locale)) %}{% endcall %}<textarea class="input mt-1 min-h-32 w-full font-mono text-xs" dir="ltr" name="public_key" maxlength="65536" required></textarea></label>
+<button type="submit" class="btn btn-primary">{% call ui::localized(rbit_localization::RepoBrowseLabel::SigningKeyAdd.text(page.locale)) %}{% endcall %}</button>
+</form>
+{% endblock %}

@@ -1,0 +1,31 @@
+<details class="box mt-4 p-4">
+<summary class="flex min-h-11 cursor-pointer items-center gap-2 font-medium">
+<span aria-hidden="true">▸</span>{% call ui::localized(OrgMessage::ProjectSavedViews.text(page.locale)) %}{% endcall %}</summary>
+<p class="hint mt-2">{% call ui::localized(OrgMessage::ProjectViewsHint.text(page.locale)) %}{% endcall %}</p>
+<ul class="mt-3 space-y-3">{% for view in data.views %}<li class="min-w-0">
+<a class="block min-h-11 break-words py-2 font-medium" href="{{ base }}?view={{ view.id }}">{{ view.title }}</a>
+<span class="badge">{% if view.shared %}{% call ui::localized(OrgMessage::ProjectSharedView.text(page.locale)) %}{% endcall %}{% else %}{% call ui::localized(OrgMessage::ProjectPersonalView.text(page.locale)) %}{% endcall %}{% endif %}</span>{% if view.can_edit %}<form method="post" action="{{ base }}/views/{{ view.id }}" class="mt-2 grid gap-2 sm:flex sm:flex-wrap">
+<input type="hidden" name="revision" value="{{ view.revision }}">
+<input type="hidden" name="shared" value="{{ view.shared }}">
+<input type="hidden" name="criteria" value="{{ criteria }}">
+<label class="min-w-0 sm:flex-1">
+<span class="label">{% call ui::localized(OrgMessage::ProjectViewName.text(page.locale)) %}{% endcall %}</span>
+<input class="input" name="title" value="{{ view.title }}" maxlength="100" required>
+</label>
+<button class="btn h-auto min-h-11 whitespace-normal py-2 self-end" type="submit">{% call ui::localized(OrgMessage::ProjectReplaceView.text(page.locale)) %}{% endcall %}</button>
+</form>
+<form method="post" action="{{ base }}/views/{{ view.id }}/delete" class="mt-2">
+<input type="hidden" name="revision" value="{{ view.revision }}">
+<button class="btn btn-ghost" type="submit">{% call ui::localized(OrgMessage::ProjectDeleteView.text(page.locale)) %}{% endcall %}</button>
+</form>
+{% endif %}</li>
+{% endfor %}</ul>
+<form method="post" action="{{ base }}/views" class="mt-4 grid gap-3">
+<input type="hidden" name="criteria" value="{{ criteria }}">
+<label>
+<span class="label">{% call ui::localized(OrgMessage::ProjectViewName.text(page.locale)) %}{% endcall %}</span>
+<input class="input" name="title" maxlength="100" required>
+</label>{% if data.can_manage %}<label class="flex min-h-11 items-center gap-2">
+<input type="checkbox" name="shared" value="true">{% call ui::localized(OrgMessage::ProjectSharedView.text(page.locale)) %}{% endcall %}</label>{% endif %}<button class="btn" type="submit">{% call ui::localized(OrgMessage::ProjectSaveView.text(page.locale)) %}{% endcall %}</button>
+</form>
+</details>

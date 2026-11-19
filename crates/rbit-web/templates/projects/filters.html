@@ -1,0 +1,47 @@
+<form method="get" action="{{ base }}" class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+<div class="min-w-0">
+<label class="label" for="project-query">{% call ui::localized(OrgMessage::ProjectSearchTitles.text(page.locale)) %}{% endcall %}</label>
+<input id="project-query" class="input" name="q" maxlength="200" value="{{ filter.q }}">
+</div>
+<div class="min-w-0">
+<label class="label" for="project-repo">{% call ui::localized(OrgMessage::ProjectRepository.text(page.locale)) %}{% endcall %}</label>
+<input id="project-repo" class="input" name="repository" maxlength="100" value="{{ filter.repository }}" placeholder="{{ OrgMessage::ProjectAllRepositories.text(page.locale) }}">
+</div>
+<div class="min-w-0">
+<label class="label" for="filter-column">{% call ui::localized(OrgMessage::ProjectColumn.text(page.locale)) %}{% endcall %}</label>
+<select class="input" id="filter-column" name="column">
+<option value="" >{% call ui::localized(OrgMessage::ProjectAll.text(page.locale)) %}{% endcall %}</option>{% for option in columns %}<option value="{{ option.index }}" {% if filter.column.unwrap_or(-1) == option.index %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select>
+</div>
+<div class="min-w-0">
+<label class="label" for="filter-priority">{% call ui::localized(OrgMessage::ProjectPriority.text(page.locale)) %}{% endcall %}</label>
+<select class="input" id="filter-priority" name="priority">
+<option value="" >{% call ui::localized(OrgMessage::ProjectAll.text(page.locale)) %}{% endcall %}</option>{% for option in priorities %}<option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>{% call ui::localized(option.label.text(page.locale)) %}{% endcall %}</option>{% endfor %}</select>
+</div>
+<div class="min-w-0">
+<label class="label" for="filter-iteration">{% call ui::localized(OrgMessage::ProjectIteration.text(page.locale)) %}{% endcall %}</label>
+<select class="input" id="filter-iteration" name="iteration">
+<option value="" >{% call ui::localized(OrgMessage::ProjectAll.text(page.locale)) %}{% endcall %}</option>
+<option value="0" {% if filter.iteration.unwrap_or(-1) == 0 %}selected{% endif %}>{% call ui::localized(OrgMessage::ProjectUnassigned.text(page.locale)) %}{% endcall %}</option>{% for option in data.iterations %}<option value="{{ option.id }}" {% if filter.iteration.unwrap_or(-1) == option.id %}selected{% endif %}>{{ option.title }}{% if option.archived %} · {% call ui::localized(OrgMessage::ProjectArchived.text(page.locale)) %}{% endcall %}{% endif %}</option>{% endfor %}</select>
+</div>
+<div class="min-w-0">
+<label class="label" for="filter-layout">{% call ui::localized(OrgMessage::ProjectLayout.text(page.locale)) %}{% endcall %}</label>
+<select class="input" id="filter-layout" name="layout">
+<option value="board" {% if !table %}selected{% endif %}>{% call ui::localized(OrgMessage::ProjectBoardLayout.text(page.locale)) %}{% endcall %}</option>
+<option value="table" {% if table %}selected{% endif %}>{% call ui::localized(OrgMessage::ProjectTableLayout.text(page.locale)) %}{% endcall %}</option>
+</select>
+</div>
+<div class="min-w-0">
+<label class="label" for="filter-sort">{% call ui::localized(OrgMessage::ProjectSort.text(page.locale)) %}{% endcall %}</label>
+<select class="input" id="filter-sort" name="sort">
+<option value="id" {% if filter.sort == rbit_services::projects::Sort::Id %}selected{% endif %}>{% call ui::localized(OrgMessage::ProjectAddedOrder.text(page.locale)) %}{% endcall %}</option>
+<option value="priority" {% if filter.sort == rbit_services::projects::Sort::Priority %}selected{% endif %}>{% call ui::localized(OrgMessage::ProjectPriority.text(page.locale)) %}{% endcall %}</option>
+<option value="target_date" {% if filter.sort == rbit_services::projects::Sort::TargetDate %}selected{% endif %}>{% call ui::localized(OrgMessage::ProjectTargetDate.text(page.locale)) %}{% endcall %}</option>
+</select>
+</div>
+<label class="flex min-h-11 items-center gap-2">
+<input type="checkbox" name="overdue" value="true" {% if filter.overdue %}checked{% endif %}>{% call ui::localized(OrgMessage::ProjectOverdue.text(page.locale)) %}{% endcall %}</label>
+<div class="flex flex-wrap items-end gap-2">
+<button class="btn" type="submit">{% call ui::localized(OrgMessage::ProjectFilter.text(page.locale)) %}{% endcall %}</button>
+<a class="btn btn-ghost" href="{{ base }}">{% call ui::localized(OrgMessage::ProjectClear.text(page.locale)) %}{% endcall %}</a>
+</div>
+</form>

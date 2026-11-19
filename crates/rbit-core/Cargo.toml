@@ -1,0 +1,26 @@
+[package]
+name = "rbit-core"
+description = "Domain model shared by every rbit crate: validated names, entities, permissions and configuration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rbit-collaboration = { workspace = true, default-features = false }
+rbit-repositories.workspace = true
+rbit-identity-models.workspace = true
+rbit-access.workspace = true
+rbit-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+url.workspace = true
+# I: references are scanned only in Markdown text (not code or link text).
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

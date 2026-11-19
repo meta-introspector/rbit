@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{#- Rendered without the visitor's theme cookie: apply the stored theme before the first paint. -#}
+{% block theme_script %}<script src="{{ page.asset("theme.js") }}"></script>{% endblock %}
+{% block content %}
+<section class="auth-shell sm:py-20">
+  <div class="card flex flex-col items-center text-center">
+    <span class="tile text-ink-muted">{% call ui::icon("wifi-off", "size-5") %}{% endcall %}</span>
+    <h1 class="mt-5 text-lg font-semibold tracking-tight">{% call ui::text(page, rbit_localization::shell::pages::PageMessage::Offline) %}{% endcall %}</h1>
+    <p class="mt-1.5 max-w-xs text-[13px] text-ink-muted text-balance">{% call ui::text(page, rbit_localization::shell::pages::PageMessage::OfflineText) %}{% endcall %}</p>
+    <div class="mt-6 flex w-full flex-col gap-2 sm:flex-row sm:justify-center">
+      <a href="/" class="btn btn-primary" hx-boost="false">{% call ui::icon("refresh", "size-3.5") %}{% endcall %}{% call ui::text(page, rbit_localization::shell::pages::PageMessage::Retry) %}{% endcall %}</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

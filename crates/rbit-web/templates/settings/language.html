@@ -1,0 +1,8 @@
+{% extends "settings/layout.html" %}
+{% import "macros.html" as ui %}
+{% block settings_content %}
+{% let text = self.labels() %}
+<section id="language" lang="{{ page.content_locale.tag() }}" dir="{{ page.content_locale.direction().as_str() }}" aria-labelledby="language-title">
+  {% include "settings/language_form.html" %}
+</section>
+{% endblock %}

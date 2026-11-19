@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block nav_context %}{% include "repo/nav_context.html" %}{% endblock %}
+{% block subnav %}{% include "repo/subnav.html" %}{% endblock %}
+{% block content %}
+<h1 class="break-words text-xl font-semibold tracking-tight">{{ pull.title }} <span class="font-normal text-ink-faint">{{ pull.number }}</span></h1>
+{% include "pulls/header.html" %}
+<section class="mt-5 min-w-0 space-y-4">
+<h2 class="text-lg font-semibold">{% call ui::localized(rbit_localization::ReviewMessage::ResolveConflicts.localized(page.locale)) %}{% endcall %}</h2>
+<p class="text-sm text-ink-muted">{% call ui::localized(rbit_localization::ReviewMessage::ConflictIntro.localized(page.locale)) %}{% endcall %}</p>
+{% if let Some(message) = notice %}
+<p role="alert" class="box p-4 text-sm">{% call ui::localized(message.localized(page.locale)) %}{% endcall %}</p>
+<a class="btn" href="{{ pull.urls.page }}/conflicts">{% call ui::localized(rbit_localization::ReviewMessage::ConflictReload.localized(page.locale)) %}{% endcall %}</a>
+{% endif %}
+{% if let Some(preview) = preview %}
+<form method="post" action="{{ pull.urls.page }}/conflicts" class="min-w-0 space-y-4">
+<input type="hidden" name="expected_head" value="{{ preview.head_sha }}">
+<input type="hidden" name="expected_base" value="{{ preview.base_sha }}">
+<input type="hidden" name="count" value="{{ preview.files.len() }}">
+<p class="break-all font-mono text-xs text-ink-muted" dir="ltr">{{ preview.head_sha }} ← {{ preview.base_sha }}</p>
+{% for file in preview.files %}
+<div class="box min-w-0 space-y-3 p-3 sm:p-4">
+<h3 class="break-all font-mono text-sm" dir="ltr">{{ file.path }}</h3>
+<input type="hidden" name="path_{{ loop.index0 }}" value="{{ file.path }}">
+<div class="grid min-w-0 gap-3 sm:grid-cols-2">
+<details class="min-w-0"><summary class="cursor-pointer text-sm">{% call ui::localized(rbit_localization::ReviewMessage::ConflictSource.localized(page.locale)) %}{% endcall %}</summary><pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-line p-2 text-xs" dir="ltr">{{ file.source }}</pre></details>
+<details class="min-w-0"><summary class="cursor-pointer text-sm">{% call ui::localized(rbit_localization::ReviewMessage::ConflictTarget.localized(page.locale)) %}{% endcall %}</summary><pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-line p-2 text-xs" dir="ltr">{{ file.target }}</pre></details>
+</div>
+<label class="label" for="resolution-{{ loop.index0 }}">{% call ui::localized(rbit_localization::ReviewMessage::ConflictResult.localized(page.locale)) %}{% endcall %}</label>
+<textarea class="input min-h-64 w-full resize-y font-mono text-sm" id="resolution-{{ loop.index0 }}" name="content_{{ loop.index0 }}" rows="12" maxlength="262144" spellcheck="false" dir="ltr">
+{{ file.merged }}</textarea>
+</div>
+{% endfor %}
+<button class="btn btn-primary min-h-11" type="submit">{% call ui::localized(rbit_localization::ReviewMessage::CommitConflictResolution.localized(page.locale)) %}{% endcall %}</button>
+</form>
+{% endif %}
+{% for file in draft %}
+<div class="box min-w-0 space-y-2 p-3"><h3 class="break-all font-mono text-sm" dir="ltr">{{ file.path }}</h3><textarea class="input min-h-64 w-full font-mono text-sm" rows="12" readonly dir="ltr" aria-label="{{ rbit_localization::ReviewMessage::ConflictResult.localized(page.locale) }}">
+{{ file.content }}</textarea></div>
+{% endfor %}
+<a class="btn" href="{{ pull.urls.page }}">{% call ui::localized(rbit_localization::PullMessage::Conversation.localized(page.locale)) %}{% endcall %}</a>
+</section>
+{% endblock %}

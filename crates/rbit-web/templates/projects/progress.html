@@ -1,0 +1,2 @@
+{% if card.progress.blocked %}<span class="badge mt-2">{% call ui::localized(rbit_localization::IssueSidebarMessage::Blocked.localized(page.locale)) %}{% endcall %}</span>{% endif %}
+{% if card.progress.total > 0 %}<p class="hint mt-2">{{ card.progress.completed }}/{{ card.progress.total }} · {% call ui::localized(rbit_localization::IssueSidebarMessage::CompletedSubissues.localized(page.locale)) %}{% endcall %}</p>{% endif %}

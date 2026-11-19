@@ -1,0 +1,348 @@
+# rbit configuration for a production instance.
+#
+# Copy to /etc/rbit/rbit.toml (the systemd unit's default) and adjust. Every key is
+# optional; omitted keys keep their built-in defaults. Any key can also be set with an
+# environment variable: RBIT_<SECTION>__<KEY>, e.g. RBIT_SERVER__PUBLIC_URL.
+# Environment variables win over this file.
+
+[server]
+# Listen on loopback only and let the reverse proxy (Caddy, nginx) terminate TLS.
+bind = "127.0.0.1:3000"
+# The address users type. Used for clone URLs, secure cookies (https://…) and the
+# cross-site request check, so it must match what the browser sees exactly.
+public_url = "https://git.example.com"
+site_name = "rbit"
+# Default for the runtime "registration" setting (administrators can change it in /admin).
+open_registration = false
+# Default for the runtime "Explore page" setting: the page listing every public repository.
+# explore_enabled = true
+# Default for the runtime "Who can browse" setting. true sends visitors to the sign-in page
+# and makes Git, LFS and the API refuse anonymous reads, public repositories included.
+# require_sign_in = false
+
+[storage]
+# SQLite database, redb store and bare repositories all live here. Back it up with
+# `rbit backup --output DIR` (see docs/deployment.md).
+data_dir = "/var/lib/rbit"
+# The key that encrypts stored credentials (TOTP seeds, webhook and push mirror secrets,
+# saved SMTP/OIDC secrets). Default: <data_dir>/secret.key, created on first start. Back
+# it up with the database; set this to keep it elsewhere (e.g. a container secret).
+# secret_key_file = "/etc/rbit/secret.key"
+
+[security]
+# Optional MFA enrollment default; live Site administration → Security overrides it.
+require_two_factor = false
+session_lifetime_days = 30
+# Sessions end this long after sign-in even when in constant use (0 = no limit).
+session_max_age_days = 90
+min_password_length = 12
+# Shared password hash/verification capacity (1..64). Default 2; restart required.
+# Increase only with measured CPU and memory headroom; this does not lower hash costs.
+max_password_jobs = 2
+# Requests from these proxies may set X-Forwarded-For / X-Forwarded-Proto. List exactly
+# the reverse proxy's address; anything broader lets clients spoof their IP address.
+# trusted_proxies = ["127.0.0.1/32", "::1/128"]
+# A header the trusted proxy sets to the client's address on its own, read ahead of
+# X-Forwarded-For. Behind Cloudflare or Cloudflare Tunnel:
+# client_ip_header = "CF-Connecting-IP"
+# Throttle sign-in, sign-up, 2FA, Git credentials, email requests and form posts.
+rate_limit = true
+# Signing up the first account needs a setup token, generated and logged at start-up
+# while there is no user. Set one here for automated deployments.
+# setup_token = "a long random string"
+# Strict-Transport-Security (one year) when public_url is https://.
+hsts = true
+hsts_include_subdomains = false
+# Show images hosted on other sites in Markdown. They learn who viewed the page; false
+# limits images to this instance.
+external_images = true
+
+[repository]
+default_branch = "main"
+# The git executable used for smart HTTP, `git gc` and backups.
+git_binary = "/usr/bin/git"
+max_render_bytes = 1048576
+# Git processes (clones, fetches, pushes over HTTP and SSH) running at once; more are
+# refused with 503 + Retry-After over HTTP.
+# max_git_processes = 128
+# Concurrent smart-HTTP Git requests from one address (429 beyond). Behind a reverse proxy
+# this needs [security] trusted_proxies, or every client shares the proxy's address.
+# max_git_requests_per_ip = 16
+# A smart-HTTP Git exchange is stopped after this long without traffic either way…
+# git_idle_timeout_seconds = 300
+# …or after this long in all.
+# git_max_seconds = 21600
+# Largest pack one push may send, in bytes (2 GiB; 0 = unlimited). Raise the reverse
+# proxy's body limit to match.
+# max_push_bytes = 2147483648
+# Source archive (zip, tar.gz) downloads one address may run at once, and when a stalled
+# or overlong download is stopped.
+# max_archives_per_ip = 2
+# archive_idle_timeout_seconds = 60
+# archive_max_seconds = 3600
+
+[mail]
+# "disabled" (password reset and verification explain that email is unavailable),
+# "log" (development) or "smtp" (see the [mail] reference for the relay settings).
+transport = "disabled"
+# from_address = "git@example.com"
+# from_name = ""                  # blank: the site name
+# smtp_host = "smtp.example.com"
+# smtp_port = 587                 # default 587 (starttls/none) or 465 (tls)
+# smtp_security = "starttls"      # "starttls" (required), "tls" or "none"
+# smtp_username = "rbit"
+# smtp_password = "…"             # prefer RBIT_MAIL__SMTP_PASSWORD in the environment
+# timeout_seconds = 30
+
+[ssh]
+# Built-in SSH server for git@… clone URLs.
+enabled = false
+bind = "0.0.0.0:2222"
+# Host and port shown in clone URLs (port 22 gives git@host:owner/repo.git).
+# public_host = "git.example.com"
+# public_port = 22
+# host_key_path = "/var/lib/rbit/ssh/host_ed25519"   # generated on first start
+# max_connections = 128
+# max_connections_per_ip = 16
+# auth_timeout_seconds = 30
+# idle_timeout_seconds = 300
+# max_session_seconds = 21600           # 6 hours
+
+[operations]
+# Prometheus metrics at /metrics. Keep the endpoint private: set a token, or block
+# /metrics at the reverse proxy and scrape the loopback address directly.
+metrics = false
+# metrics_token = "replace-with-a-long-random-string"
+# Update the commit-graph and warm language and last-commit caches right after each push.
+warm_caches_on_push = true
+# `git gc --auto` and a commit-graph write for repositories pushed to since the last run,
+# then cache pruning.
+# 0 disables periodic maintenance.
+maintenance_interval_minutes = 360
+# Background jobs (cache warming, git gc) running at the same time.
+job_concurrency = 2
+# Insights cache limits (redb). Pruned entries are recomputed on demand. 0 = no limit.
+insights_cache_max_age_days = 30
+insights_cache_max_entries = 50000
+
+[api]
+# The REST API under /api/v1, authenticated with personal access tokens. When off, every
+# /api path answers 404.
+enabled = true
+# Items per page when a request does not send ?per_page=, and the most it may ask for.
+default_page_size = 30
+max_page_size = 100
+
+[webhooks]
+# Send webhook deliveries. When off, hooks can still be configured but nothing is sent.
+enabled = true
+# Refuse targets that resolve to loopback, private, link-local, unique-local and other
+# internal addresses. Only enable this if repository admins may probe your network.
+allow_private_addresses = false
+# Upper bound for one attempt (connect, send, read the response).
+timeout_seconds = 10
+# Attempts per delivery, including the first (retries after ~10 s, 1 min, 10 min, 1 h, 6 h).
+max_attempts = 5
+# Deliveries in flight at once across the instance.
+concurrency = 4
+# Days the delivery log keeps requests and responses.
+delivery_retention_days = 14
+
+[releases]
+# Files attached to releases live in <data_dir>/attachments (included in backups).
+# Largest attached file, in bytes (512 MiB), for web and API uploads
+# (POST /api/v1/repos/{owner}/{repo}/releases/{id}/assets). Raise the reverse proxy's
+# body limit to match.
+max_asset_bytes = 536870912
+max_assets_per_release = 50
+# Upper bound for one upload (web or API); uploads are exempt from the 30-second page and
+# API timeouts.
+upload_timeout_seconds = 3600
+
+[mirrors]
+# Allow pull mirrors (repositories fetched from an http(s) upstream on a schedule).
+enabled = true
+# Fetch interval for new mirrors, and the shortest interval a mirror may use.
+default_interval_minutes = 480
+min_interval_minutes = 10
+# Upper bound for one fetch.
+fetch_timeout_seconds = 900
+# Refuse upstreams on loopback, private, link-local and other internal addresses.
+allow_private_addresses = false
+
+[imports]
+# Importing repositories (with issues, pull requests, releases and LFS objects) from
+# GitHub, GitHub Enterprise, Gitea and Forgejo on the "New repository" page.
+# enabled = true
+# Refuse sources (API, Git, release files, LFS objects) on loopback, private, link-local
+# and unique-local addresses.
+# allow_private_addresses = false
+# Imports running at the same time across the instance; more wait in line.
+# max_concurrent = 2
+# Upper bound for copying the Git repository.
+# git_timeout_seconds = 3600
+# Upper bound for one API request (release files and LFS objects get 10 times this).
+# api_timeout_seconds = 60
+# Longest wait for the source's API rate limit to reset; a longer wait fails the import.
+# rate_limit_max_wait_seconds = 900
+# Match imported authors with local accounts: "none" (the importing user writes
+# everything, naming the original author), "email" (same verified email address) or
+# "email_or_username" (also the same user name).
+# author_mapping = "none"
+
+[push_mirrors]
+# Allow pushing repositories to other http(s) remotes, after pushes and on a schedule.
+# enabled = true
+# Push every mirror at least this often.
+# interval_minutes = 480
+# Wait this long after a push before pushing to mirrors, so a burst is sent once.
+# debounce_seconds = 10
+# Upper bound for one push.
+# push_timeout_seconds = 900
+# Refuse remotes on loopback, private, link-local and other internal addresses.
+# allow_private_addresses = false
+
+[issues]
+# Commits scanned for `#N` references and closing keywords per pushed ref update.
+scan_commit_limit = 250
+# In-app notifications (the bell in the header and /notifications).
+notifications = true
+# Read notifications older than this are pruned daily.
+notification_retention_days = 90
+
+[pulls]
+# Merges and trial merges run in scratch repositories under <data_dir>/tmp (never backed up).
+# Upper bound for one merge, in seconds.
+merge_timeout_seconds = 120
+# Merges running at once across the instance (always one at a time per repository).
+max_concurrent_merges = 2
+# Trial merges computing mergeability at once.
+mergeability_concurrency = 2
+# Commits listed on a pull request's Commits tab.
+max_commits = 250
+# Domain of the addresses in commits rbit makes; empty = "noreply.<host of server.public_url>".
+noreply_domain = ""
+
+[notifications]
+# Email notifications, on top of the in-app inbox ([issues] notifications). They need a
+# [mail] transport; only verified addresses receive them. Users choose in
+# Settings -> Notifications; every email has a one-click unsubscribe link built from
+# server.public_url.
+email = true
+# What users who never chose get: "off", "participating" or "all".
+default_email = "participating"
+# Users can collect their notification emails into a daily or a weekly (Monday) digest.
+# This is the hour (0-23, UTC) digests are sent at unless a user picks another one;
+# administrators can change it at runtime under Site administration -> Settings.
+digest_hour = 8
+
+[editor]
+# Editing and uploading files in the browser. Text edits are limited by
+# [repository] max_render_bytes instead (the editor is only offered for files the
+# browser displays).
+# Largest file that may be uploaded through the web interface, in bytes (50 MiB).
+# Raise the reverse proxy's body limit to match.
+max_upload_bytes = 52428800
+# Files one upload (one commit) may add.
+max_upload_files = 100
+# Upper bound for one upload request; uploads bypass the 30-second page timeout.
+upload_timeout_seconds = 600
+
+[lfs]
+# Serve the Git LFS API (batch, transfers, locks) under /<owner>/<repo>.git/info/lfs and
+# `git-lfs-authenticate` over SSH. Objects live in <data_dir>/lfs (included in backups).
+enabled = true
+# Largest object a client may upload, in bytes (2 GiB). Raise the reverse proxy's body
+# limit to match, and turn off its request buffering for LFS uploads.
+max_object_bytes = 2147483648
+# How long the signed headers handed to clients stay valid, in seconds.
+token_lifetime_seconds = 3600
+
+[auth]
+# External sign-in with OpenID Connect providers and GitHub; off until a provider is
+# listed. Register {public_url}/login/{id}/callback as the redirect URI at the provider.
+# Secrets can come from RBIT_AUTH__PROVIDERS__<N>__CLIENT_SECRET (N = position, from 0,
+# or the provider id in upper case with '-' as '_').
+# Upper bound for one request to a provider.
+timeout_seconds = 10
+# Allow providers on loopback/private addresses and plain-http issuers (on-premises IdPs).
+allow_private_addresses = false
+
+# [[auth.providers]]
+# kind = "oidc"
+# id = "sso"                       # lower-case slug, used in URLs; don't change it later
+# name = "Company SSO"             # "Sign in with Company SSO"
+# issuer = "https://sso.example.com/realms/main"
+# client_id = "rbit"
+# client_secret = "change-me"      # prefer RBIT_AUTH__PROVIDERS__SSO__CLIENT_SECRET
+# scopes = ["openid", "email", "profile"]
+# # true: when the site's registration is open; "always": even when closed; false: never.
+# allow_registration = true
+# # Link a first sign-in to the account with the same verified email (both sides verified),
+# # and take the address this provider verified as verified when it registers an account
+# # (otherwise a new account confirms its address by email).
+# trust_email = false
+# # Skip rbit's own 2FA when the ID token reports MFA in `amr`.
+# trust_mfa = false
+
+# [[auth.providers]]
+# kind = "github"
+# id = "github"
+# name = "GitHub"
+# client_id = "Iv1.0123456789abcdef"
+# client_secret = "change-me"      # prefer RBIT_AUTH__PROVIDERS__GITHUB__CLIENT_SECRET
+# # base_url = "https://github.example.com"   # GitHub Enterprise Server
+
+# Defaults for white-label identity. Administrators can override these live at /admin/settings.
+# Images may use HTTPS URLs or /paths served by your reverse proxy.
+[branding]
+description = "Self-hosted Git"
+welcome_title = ""                 # blank uses server.site_name
+welcome_message = "Welcome to our Git platform."
+logo_url = ""                      # blank uses bundled logo
+favicon_url = ""
+app_icon_url = ""                  # square icon, at least 512x512
+primary_color = ""                 # e.g. #2563eb; set both colors or neither
+primary_text_color = ""            # e.g. #ffffff
+footer_text = ""
+support_url = ""
+terms_url = ""
+privacy_url = ""
+show_powered_by = true
+show_version = true
+show_features = true
+
+[updates]
+# Check the public rbit.sh stable-release feed in the background. No running
+# version, instance identity, credentials or user/repository data is sent.
+# One successful check is cached in memory for 24 hours; failures back off.
+check_for_updates = true
+feed_url = "https://rbit.sh/GitRbit/rbit/releases/latest.json"
+release_url_prefix = "https://rbit.sh/GitRbit/rbit/releases/tag/"
+# Independent of checking: hide the public footer version, /api/v1/version,
+# SSH version suffix and version numbers in integration User-Agents when false.
+# Administrators retain local diagnostics; CLI --version and backups stay accurate.
+report_version = true
+
+[actions]
+# CI/CD with rbit-runner (docs/actions.md). Off by default; when off, Actions is fully
+# absent: no pages, no runner endpoint, no background work, workflow files are ignored.
+# Changing it needs a restart.
+enabled = false
+# Turn Actions on for repositories created from now on (existing ones keep their setting).
+enable_for_new_repositories = false
+# The key that seals secrets; empty = <data_dir>/actions/secrets.key. `rbit backup` does
+# not copy it: back it up separately.
+secrets_key_file = ""
+log_retention_days = 90
+run_retention_days = 365
+# Instance runners serve only the owners an administrator allows, unless this is on.
+instance_runners_for_all = false
+# Artifacts: the largest one, the bytes kept per repository, and days kept. Not backed up.
+max_artifact_bytes = 2147483648
+max_artifact_storage_bytes = 10737418240
+artifact_retention_days = 90
+# actions/cache: bytes kept per repository for all its runners (least recently used go
+# first) and days an entry is kept unused. Not backed up.
+max_cache_storage_bytes = 10737418240
+cache_retention_days = 7

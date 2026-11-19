@@ -1,0 +1,284 @@
+{
+  "paths": {
+    "/repos/{owner}/{repo}/issues/{number}/relations": {
+      "parameters": [
+        {
+          "name": "owner",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "repo",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Read visible issue relationships and direct-subissue progress",
+        "description": "Anonymous reads are allowed for public work. Limited and workflow tokens are refused. Counts and blocked status exclude inaccessible relationships.",
+        "responses": {
+          "200": {
+            "description": "Visible relationships",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueRelations"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient write access or a limited/workflow token."
+          },
+          "404": {
+            "description": "An endpoint or relationship is missing or inaccessible."
+          },
+          "409": {
+            "description": "Relationship cannot be added; cycle, parent or capacity constraints. No private graph details are exposed."
+          }
+        },
+        "operationId": "listIssueRelations"
+      },
+      "post": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Add a subissue or blocking relationship",
+        "description": "Requires write scope and current write access to both repositories. Same repository or same organization only. Both kinds share one acyclic dependency graph. Duplicate adds return the existing stable edge id.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "number"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "child",
+                      "blocked_by"
+                    ]
+                  },
+                  "repository": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "default": "",
+                    "description": "Repository name under the source owner; blank means this repository."
+                  },
+                  "number": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created or existing edge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient write access or a limited/workflow token."
+          },
+          "404": {
+            "description": "An endpoint or relationship is missing or inaccessible."
+          },
+          "409": {
+            "description": "Relationship cannot be added; cycle, parent or capacity constraints. No private graph details are exposed."
+          }
+        },
+        "operationId": "addIssueRelation"
+      }
+    },
+    "/repos/{owner}/{repo}/issues/{number}/relations/{edge}": {
+      "parameters": [
+        {
+          "name": "owner",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "repo",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "number",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "edge",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Remove one exact relationship",
+        "description": "Requires write scope and live write access to both endpoints. The edge must touch the requested issue. Stable edge ids prevent stale removal after re-addition.",
+        "responses": {
+          "204": {
+            "description": "Relationship removed"
+          },
+          "403": {
+            "description": "Insufficient write access or a limited/workflow token."
+          },
+          "404": {
+            "description": "An endpoint or relationship is missing or inaccessible."
+          },
+          "409": {
+            "description": "Relationship cannot be added; cycle, parent or capacity constraints. No private graph details are exposed."
+          }
+        },
+        "operationId": "removeIssueRelation"
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "IssueRelationProgress": {
+        "type": "object",
+        "required": [
+          "completed",
+          "total",
+          "blocked"
+        ],
+        "properties": {
+          "completed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "IssueRelation": {
+        "type": "object",
+        "required": [
+          "id",
+          "issue_id",
+          "owner",
+          "repository",
+          "number",
+          "title",
+          "state",
+          "issue_kind",
+          "relationship",
+          "can_remove"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "issue_id": {
+            "type": "integer"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "issue_kind": {
+            "type": "string"
+          },
+          "relationship": {
+            "type": "string"
+          },
+          "can_remove": {
+            "type": "boolean"
+          }
+        }
+      },
+      "IssueRelations": {
+        "type": "object",
+        "required": [
+          "progress",
+          "items",
+          "can_edit"
+        ],
+        "properties": {
+          "progress": {
+            "$ref": "#/components/schemas/IssueRelationProgress"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/IssueRelation"
+            }
+          },
+          "can_edit": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}
